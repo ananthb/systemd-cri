@@ -1,0 +1,17 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "machineman",
+    srcs = [
+        "image.go",
+        "runtime.go",
+    ],
+    importpath = "github.com/example/project/internal/machineman",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "@com_github_containers_image_v5//copy",
+        "@com_github_containers_image_v5//signature",
+        "@com_github_containers_image_v5//transports/alltransports",
+        "@io_k8s_cri_api//pkg/apis/runtime/v1:runtime",
+    ],
+)
