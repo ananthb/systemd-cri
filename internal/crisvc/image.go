@@ -1,4 +1,4 @@
-package criservice
+package crisvc
 
 import (
 	"context"

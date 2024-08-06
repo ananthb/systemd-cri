@@ -1,19 +1,23 @@
-package criservice
+package crisvc
 
 import (
 	"context"
 
-	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
 type criService struct {
-	runtimeClient runtimeapi.RuntimeServiceClient
+	runtimeClient runtime.RuntimeServiceClient
+}
+
+func (r *criService) RuntimeConfig(ctx context.Context, req *runtime.RuntimeConfigRequest) (*runtime.RuntimeConfigResponse, error) {
+	return nil, nil
 }
 
 func (r *criService) Version(
 	context.Context,
-	*runtimeapi.VersionRequest,
-) (*runtimeapi.VersionResponse, error) {
+	*runtime.VersionRequest,
+) (*runtime.VersionResponse, error) {
 	return nil, nil
 }
 
@@ -21,8 +25,8 @@ func (r *criService) Version(
 // the sandbox is in the ready state on success.
 func (r *criService) RunPodSandbox(
 	context.Context,
-	*runtimeapi.RunPodSandboxRequest,
-) (*runtimeapi.RunPodSandboxResponse, error) {
+	*runtime.RunPodSandboxRequest,
+) (*runtime.RunPodSandboxResponse, error) {
 	return nil, nil
 }
 
@@ -37,8 +41,8 @@ func (r *criService) RunPodSandbox(
 // multiple StopPodSandbox calls are expected.
 func (r *criService) StopPodSandbox(
 	context.Context,
-	*runtimeapi.StopPodSandboxRequest,
-) (*runtimeapi.StopPodSandboxResponse, error) {
+	*runtime.StopPodSandboxRequest,
+) (*runtime.StopPodSandboxResponse, error) {
 	return nil, nil
 }
 
@@ -48,8 +52,8 @@ func (r *criService) StopPodSandbox(
 // already been removed.
 func (r *criService) RemovePodSandbox(
 	context.Context,
-	*runtimeapi.RemovePodSandboxRequest,
-) (*runtimeapi.RemovePodSandboxResponse, error) {
+	*runtime.RemovePodSandboxRequest,
+) (*runtime.RemovePodSandboxResponse, error) {
 	return nil, nil
 }
 
@@ -57,32 +61,32 @@ func (r *criService) RemovePodSandbox(
 // present,  an error.
 func (r *criService) PodSandboxStatus(
 	context.Context,
-	*runtimeapi.PodSandboxStatusRequest,
-) (*runtimeapi.PodSandboxStatusResponse, error) {
+	*runtime.PodSandboxStatusRequest,
+) (*runtime.PodSandboxStatusResponse, error) {
 	return nil, nil
 }
 
 // ListPodSandbox  a list of PodSandboxes.
 func (r *criService) ListPodSandbox(
 	context.Context,
-	*runtimeapi.ListPodSandboxRequest,
-) (*runtimeapi.ListPodSandboxResponse, error) {
+	*runtime.ListPodSandboxRequest,
+) (*runtime.ListPodSandboxResponse, error) {
 	return nil, nil
 }
 
 // CreateContainer creates a new container in specified PodSandbox
 func (r *criService) CreateContainer(
 	context.Context,
-	*runtimeapi.CreateContainerRequest,
-) (*runtimeapi.CreateContainerResponse, error) {
+	*runtime.CreateContainerRequest,
+) (*runtime.CreateContainerResponse, error) {
 	return nil, nil
 }
 
 // StartContainer starts the container.
 func (r *criService) StartContainer(
 	context.Context,
-	*runtimeapi.StartContainerRequest,
-) (*runtimeapi.StartContainerResponse, error) {
+	*runtime.StartContainerRequest,
+) (*runtime.StartContainerResponse, error) {
 	return nil, nil
 }
 
@@ -93,8 +97,8 @@ func (r *criService) StartContainer(
 // reached.
 func (r *criService) StopContainer(
 	context.Context,
-	*runtimeapi.StopContainerRequest,
-) (*runtimeapi.StopContainerResponse, error) {
+	*runtime.StopContainerRequest,
+) (*runtime.StopContainerResponse, error) {
 	return nil, nil
 }
 
@@ -104,16 +108,16 @@ func (r *criService) StopContainer(
 // already been removed.
 func (r *criService) RemoveContainer(
 	context.Context,
-	*runtimeapi.RemoveContainerRequest,
-) (*runtimeapi.RemoveContainerResponse, error) {
+	*runtime.RemoveContainerRequest,
+) (*runtime.RemoveContainerResponse, error) {
 	return nil, nil
 }
 
 // ListContainers lists all containers by filters.
 func (r *criService) ListContainers(
 	context.Context,
-	*runtimeapi.ListContainersRequest,
-) (*runtimeapi.ListContainersResponse, error) {
+	*runtime.ListContainersRequest,
+) (*runtime.ListContainersResponse, error) {
 	return nil, nil
 }
 
@@ -121,16 +125,16 @@ func (r *criService) ListContainers(
 // present,  an error.
 func (r *criService) ContainerStatus(
 	context.Context,
-	*runtimeapi.ContainerStatusRequest,
-) (*runtimeapi.ContainerStatusResponse, error) {
+	*runtime.ContainerStatusRequest,
+) (*runtime.ContainerStatusResponse, error) {
 	return nil, nil
 }
 
 // UpdateContainerResources updates ContainerConfig of the container synchronously.
 // If runtime fails to transactionally update the requested resources, an error is returned.
 func (r *criService) UpdateContainerResources(context.Context,
-	*runtimeapi.UpdateContainerResourcesRequest,
-) (*runtimeapi.UpdateContainerResourcesResponse, error) {
+	*runtime.UpdateContainerResourcesRequest,
+) (*runtime.UpdateContainerResourcesResponse, error) {
 	return nil, nil
 }
 
@@ -141,40 +145,40 @@ func (r *criService) UpdateContainerResources(context.Context,
 // Once it  error, new container log file MUST NOT be created.
 func (r *criService) ReopenContainerLog(
 	context.Context,
-	*runtimeapi.ReopenContainerLogRequest,
-) (*runtimeapi.ReopenContainerLogResponse, error) {
+	*runtime.ReopenContainerLogRequest,
+) (*runtime.ReopenContainerLogResponse, error) {
 	return nil, nil
 }
 
 // ExecSync runs a command in a container synchronously.
 func (r *criService) ExecSync(
 	context.Context,
-	*runtimeapi.ExecSyncRequest,
-) (*runtimeapi.ExecSyncResponse, error) {
+	*runtime.ExecSyncRequest,
+) (*runtime.ExecSyncResponse, error) {
 	return nil, nil
 }
 
 // Exec prepares a streaming endpoint to execute a command in the container.
 func (r *criService) Exec(
 	context.Context,
-	*runtimeapi.ExecRequest,
-) (*runtimeapi.ExecResponse, error) {
+	*runtime.ExecRequest,
+) (*runtime.ExecResponse, error) {
 	return nil, nil
 }
 
 // Attach prepares a streaming endpoint to attach to a running container.
 func (r *criService) Attach(
 	context.Context,
-	*runtimeapi.AttachRequest,
-) (*runtimeapi.AttachResponse, error) {
+	*runtime.AttachRequest,
+) (*runtime.AttachResponse, error) {
 	return nil, nil
 }
 
 // PortForward prepares a streaming endpoint to forward ports from a PodSandbox.
 func (r *criService) PortForward(
 	context.Context,
-	*runtimeapi.PortForwardRequest,
-) (*runtimeapi.PortForwardResponse, error) {
+	*runtime.PortForwardRequest,
+) (*runtime.PortForwardResponse, error) {
 	return nil, nil
 }
 
@@ -182,16 +186,16 @@ func (r *criService) PortForward(
 // exist, the call  an error.
 func (r *criService) ContainerStats(
 	context.Context,
-	*runtimeapi.ContainerStatsRequest,
-) (*runtimeapi.ContainerStatsResponse, error) {
+	*runtime.ContainerStatsRequest,
+) (*runtime.ContainerStatsResponse, error) {
 	return nil, nil
 }
 
 // ListContainerStats  stats of all running containers.
 func (r *criService) ListContainerStats(
 	context.Context,
-	*runtimeapi.ListContainerStatsRequest,
-) (*runtimeapi.ListContainerStatsResponse, error) {
+	*runtime.ListContainerStatsRequest,
+) (*runtime.ListContainerStatsResponse, error) {
 	return nil, nil
 }
 
@@ -199,47 +203,47 @@ func (r *criService) ListContainerStats(
 // exist, the call  an error.
 func (r *criService) PodSandboxStats(
 	context.Context,
-	*runtimeapi.PodSandboxStatsRequest,
-) (*runtimeapi.PodSandboxStatsResponse, error) {
+	*runtime.PodSandboxStatsRequest,
+) (*runtime.PodSandboxStatsResponse, error) {
 	return nil, nil
 }
 
 // ListPodSandboxStats  stats of the pod sandboxes matching a filter.
 func (r *criService) ListPodSandboxStats(
 	context.Context,
-	*runtimeapi.ListPodSandboxStatsRequest,
-) (*runtimeapi.ListPodSandboxStatsResponse, error) {
+	*runtime.ListPodSandboxStatsRequest,
+) (*runtime.ListPodSandboxStatsResponse, error) {
 	return nil, nil
 }
 
 // UpdateRuntimeConfig updates the runtime configuration based on the given request.
 func (r *criService) UpdateRuntimeConfig(
 	context.Context,
-	*runtimeapi.UpdateRuntimeConfigRequest,
-) (*runtimeapi.UpdateRuntimeConfigResponse, error) {
+	*runtime.UpdateRuntimeConfigRequest,
+) (*runtime.UpdateRuntimeConfigResponse, error) {
 	return nil, nil
 }
 
 // Status  the status of the runtime.
 func (r *criService) Status(
 	context.Context,
-	*runtimeapi.StatusRequest,
-) (*runtimeapi.StatusResponse, error) {
+	*runtime.StatusRequest,
+) (*runtime.StatusResponse, error) {
 	return nil, nil
 }
 
 // CheckpointContainer checkpoints a container
 func (r *criService) CheckpointContainer(
 	context.Context,
-	*runtimeapi.CheckpointContainerRequest,
-) (*runtimeapi.CheckpointContainerResponse, error) {
+	*runtime.CheckpointContainerRequest,
+) (*runtime.CheckpointContainerResponse, error) {
 	return nil, nil
 }
 
 // GetContainerEvents gets container events from the CRI runtime
 func (r *criService) GetContainerEvents(
-	*runtimeapi.GetEventsRequest,
-	runtimeapi.RuntimeService_GetContainerEventsServer,
+	*runtime.GetEventsRequest,
+	runtime.RuntimeService_GetContainerEventsServer,
 ) error {
 	return nil
 }
@@ -251,15 +255,15 @@ func (r *criService) GetContainerEvents(
 // ListMetricDescriptors call, then the metric will not be broadcasted.
 func (r *criService) ListMetricDescriptors(
 	context.Context,
-	*runtimeapi.ListMetricDescriptorsRequest,
-) (*runtimeapi.ListMetricDescriptorsResponse, error) {
+	*runtime.ListMetricDescriptorsRequest,
+) (*runtime.ListMetricDescriptorsResponse, error) {
 	return nil, nil
 }
 
 // ListPodSandboxMetrics gets pod sandbox metrics from CRI Runtime
 func (r *criService) ListPodSandboxMetrics(
 	context.Context,
-	*runtimeapi.ListPodSandboxMetricsRequest,
-) (*runtimeapi.ListPodSandboxMetricsResponse, error) {
+	*runtime.ListPodSandboxMetricsRequest,
+) (*runtime.ListPodSandboxMetricsResponse, error) {
 	return nil, nil
 }
