@@ -4,6 +4,7 @@ go 1.22.2
 
 require (
 	github.com/containers/image/v5 v5.32.0
+	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/soheilhy/cmux v0.1.5
 	google.golang.org/grpc v1.64.1
 	k8s.io/cri-api v0.30.0

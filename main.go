@@ -14,12 +14,26 @@ import (
 	"strings"
 
 	"git.sr.ht/~ananth/systemd-cri/internal/crisvc"
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"
 	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
+var logLevel = flag.String("log-level", "info", "log level")
 var listenAddr = flag.String("listen-addr", "unix:///run/systemd-cri.sock", "address to listen on")
+
+func init() {
+	flag.Parse()
+
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		slog.Error("error parsing log level", "error", err)
+		os.Exit(1)
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
+}
 
 func main() {
 	flag.Parse()
@@ -63,8 +77,15 @@ func main() {
 		}
 	}()
 
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyReady)
+
 	<-ctx.Done()
 	slog.Info("shutting down")
+	_, _ = daemon.SdNotify(false, daemon.SdNotifyStopping)
+
+	if err := lis.Close(); err != nil {
+		slog.Error("error closing listener", "error", err)
+	}
 
 	grpcServer.GracefulStop()
 
@@ -96,6 +117,7 @@ func listen() (net.Listener, error) {
 		if strings.Contains(addr.Path, ":") {
 			return net.Listen("tcp", addr.Host)
 		}
+
 		return net.Listen("unix", unixAddr)
 	default:
 		return nil, fmt.Errorf("unsupported scheme %s", addr.Scheme)
