@@ -2,19 +2,28 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 
 	"git.sr.ht/~ananth/systemd-cri/internal/crisvc"
 	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"
-	v1 "k8s.io/cri-api/pkg/apis/runtime/v1"
+	runtime "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
 
+var listenAddr = flag.String("listen-addr", "unix:///run/systemd-cri.sock", "address to listen on")
+
 func main() {
+	flag.Parse()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -25,13 +34,12 @@ func main() {
 	}
 
 	grpcServer := grpc.NewServer()
+	httpServer := new(http.Server)
 
-	v1.RegisterRuntimeServiceServer(grpcServer, cri)
-	v1.RegisterImageServiceServer(grpcServer, cri)
+	runtime.RegisterRuntimeServiceServer(grpcServer, cri)
+	runtime.RegisterImageServiceServer(grpcServer, cri)
 
-	const addr = ":50051"
-
-	lis, err := net.Listen("tcp", addr)
+	lis, err := listen()
 	if err != nil {
 		slog.Error("error creating listener", "error", err)
 		os.Exit(1)
@@ -41,7 +49,7 @@ func main() {
 	grpcLis := m.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
 	httpLis := m.Match(cmux.HTTP1Fast())
 
-	slog.Info("starting server", "address", addr)
+	slog.Info("starting server", "address", *listenAddr)
 	go func() {
 		if err := grpcServer.Serve(grpcLis); err != nil {
 			slog.Error("error serving grpc", "error", err)
@@ -49,7 +57,7 @@ func main() {
 		}
 	}()
 	go func() {
-		if err := http.Serve(httpLis, nil); err != nil {
+		if err := httpServer.Serve(httpLis); err != nil {
 			slog.Error("error serving http", "error", err)
 			os.Exit(1)
 		}
@@ -59,4 +67,37 @@ func main() {
 	slog.Info("shutting down")
 
 	grpcServer.GracefulStop()
+
+	ctx, cancel = context.WithTimeout(context.Background(), 5)
+	defer cancel()
+	if err := httpServer.Shutdown(ctx); err != nil {
+		slog.Error("error shutting down http", "error", err)
+	}
+}
+
+func listen() (net.Listener, error) {
+	if *listenAddr == "" {
+		return nil, nil
+	}
+
+	addr, err := url.Parse(*listenAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	unixAddr := path.Join(addr.Host, addr.Path)
+
+	switch addr.Scheme {
+	case "unix":
+		return net.Listen("unix", unixAddr)
+	case "tcp":
+		return net.Listen("tcp", addr.Host)
+	case "":
+		if strings.Contains(addr.Path, ":") {
+			return net.Listen("tcp", addr.Host)
+		}
+		return net.Listen("unix", unixAddr)
+	default:
+		return nil, fmt.Errorf("unsupported scheme %s", addr.Scheme)
+	}
 }
