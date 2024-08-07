@@ -30,11 +30,9 @@ jobs:
           CGO_ENABLED: 0
         shell: bash
         run: |
-          go generate -x ./...
-
           gobuild() {
             env GOOS=linux GOARCH=$1 go build -o systemd-cri
-            tar -czf systemd-cri_"${VERSION}"_linux_"$1".tar.zst systemd-cri
+            tar -czf systemd-cri_linux_"$1_$VERSION".tar.zst systemd-cri
             rm systemd-cri
           }
 

@@ -1,4 +1,3 @@
-//go:generate sh -c "printf 'package main\n\nconst version = `%s`\n' ${VERSION} > version.go"
 package main
 
 import (
@@ -12,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"runtime/debug"
 	"strings"
 
 	"github.com/ananthb/systemd-cri/internal/crisvc"
@@ -23,6 +23,7 @@ import (
 
 var logLevel = flag.String("log-level", "info", "log level")
 var listenAddr = flag.String("listen-addr", "unix:///run/systemd-cri.sock", "address to listen on")
+var version = flag.Bool("version", false, "Print version and exit")
 
 func init() {
 	flag.Parse()
@@ -37,7 +38,14 @@ func init() {
 }
 
 func main() {
-	flag.Parse()
+	if *version {
+		v := "(devel)"
+		if info, ok := debug.ReadBuildInfo(); ok {
+			v = info.Main.Version
+		}
+		fmt.Println(v)
+		os.Exit(0)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
