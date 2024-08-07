@@ -9,6 +9,8 @@ type CRIService interface {
 	runtimeapi.ImageServiceServer
 }
 
-func New() (CRIService, error) {
-	return &criService{}, nil
+func New(stateDir string) (CRIService, error) {
+	return &criService{
+		stateDir: stateDir,
+	}, nil
 }

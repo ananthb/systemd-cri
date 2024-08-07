@@ -7,7 +7,7 @@ import (
 )
 
 type criService struct {
-	runtimeClient runtime.RuntimeServiceClient
+	stateDir string
 }
 
 func (r *criService) RuntimeConfig(ctx context.Context, req *runtime.RuntimeConfigRequest) (*runtime.RuntimeConfigResponse, error) {
