@@ -1,0 +1,55 @@
+name: Release 🚀
+
+on:
+  release:
+    types:
+      - created
+
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release_binaries_and_images:
+    name: Release binaries and container images
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          VERSION: ${{ github.ref_name }}
+          TAGS: ${{ github.ref_name }},${{ github.sha }},latest
+          CGO_ENABLED: 0
+        shell: bash
+        run: |
+          go generate -x ./...
+
+          gobuild() {
+            env GOOS=linux GOARCH=$1 go build -o systemd-cri
+            tar -czf systemd-cri_"${VERSION}"_linux_"$1".tar.zst systemd-cri
+            rm systemd-cri
+          }
+
+          gobuild amd64
+          gobuild arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: systemd-cri
+          path: |
+            systemd-cri*.tar.zst
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          generate_release_notes: true
+          files: |
+            systemd-cri*.tar.zst

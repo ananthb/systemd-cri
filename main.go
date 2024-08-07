@@ -1,3 +1,4 @@
+//go:generate sh -c "printf 'package main\n\nconst version = `%s`\n' ${VERSION} > version.go"
 package main
 
 import (
@@ -13,7 +14,7 @@ import (
 	"path"
 	"strings"
 
-	"git.sr.ht/~ananth/systemd-cri/internal/crisvc"
+	"github.com/ananthb/systemd-cri/internal/crisvc"
 	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/soheilhy/cmux"
 	"google.golang.org/grpc"

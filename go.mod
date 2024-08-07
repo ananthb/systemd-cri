@@ -1,4 +1,4 @@
-module git.sr.ht/~ananth/systemd-cri
+module github.com/ananthb/systemd-cri
 
 go 1.22.2
 
