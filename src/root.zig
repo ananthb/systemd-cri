@@ -35,6 +35,10 @@ pub const image_service = @import("cri/image_service.zig");
 pub const grpc = @import("server/grpc.zig");
 pub const streaming = @import("server/streaming.zig");
 
+// Metrics
+pub const prometheus = @import("metrics/prometheus.zig");
+pub const metrics_server = @import("metrics/server.zig");
+
 // State persistence
 pub const store = @import("state/store.zig");
 
@@ -61,6 +65,8 @@ pub const ImageService = image_service.ImageService;
 pub const GrpcServer = grpc.GrpcServer;
 pub const StreamingServer = streaming.StreamingServer;
 pub const Cni = cni.Cni;
+pub const MetricsRegistry = prometheus.Registry;
+pub const MetricsServer = metrics_server.MetricsServer;
 
 test {
     // Run all module tests

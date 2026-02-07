@@ -11,11 +11,14 @@ const image_service = @import("cri/image_service.zig");
 const grpc = @import("server/grpc.zig");
 const streaming = @import("server/streaming.zig");
 const logging = @import("util/logging.zig");
+const prometheus = @import("metrics/prometheus.zig");
+const metrics_server = @import("metrics/server.zig");
 
 const VERSION = "0.1.0";
 const DEFAULT_STATE_DIR = "/var/lib/systemd-cri";
 const DEFAULT_RUNTIME_DIR = "/run/systemd-cri";
 const DEFAULT_STREAMING_PORT: u16 = 10010;
+const DEFAULT_METRICS_PORT: u16 = 9090;
 
 /// Command line arguments
 const Args = struct {
@@ -23,6 +26,7 @@ const Args = struct {
     runtime_dir: []const u8,
     socket_path: []const u8,
     streaming_port: u16 = DEFAULT_STREAMING_PORT,
+    metrics_port: u16 = DEFAULT_METRICS_PORT,
     log_level: logging.Level = .info,
     help: bool = false,
     version: bool = false,
@@ -96,6 +100,15 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
                 std.debug.print("Error: invalid port number: {s}\n", .{port_str});
                 return error.InvalidArgs;
             };
+        } else if (std.mem.eql(u8, arg, "--metrics-port")) {
+            const port_str = arg_it.next() orelse {
+                std.debug.print("Error: --metrics-port requires a port number\n", .{});
+                return error.InvalidArgs;
+            };
+            args.metrics_port = std.fmt.parseInt(u16, port_str, 10) catch {
+                std.debug.print("Error: invalid port number: {s}\n", .{port_str});
+                return error.InvalidArgs;
+            };
         } else if (std.mem.eql(u8, arg, "--log-level")) {
             const level_str = arg_it.next() orelse {
                 std.debug.print("Error: --log-level requires an argument\n", .{});
@@ -153,11 +166,17 @@ fn printHelp() void {
         \\  --state-dir PATH        State directory (default: $STATE_DIRECTORY or /var/lib/systemd-cri)
         \\  --socket PATH           gRPC socket path (default: $RUNTIME_DIRECTORY/cri.sock)
         \\  --streaming-port PORT   HTTP streaming port (default: 10010)
+        \\  --metrics-port PORT     Prometheus metrics port (default: 9090)
         \\  --log-level LEVEL       Log level: debug, info, warn, error (default: info)
         \\
         \\Environment Variables:
         \\  STATE_DIRECTORY         State directory (set by systemd StateDirectory=)
         \\  RUNTIME_DIRECTORY       Runtime directory (set by systemd RuntimeDirectory=)
+        \\
+        \\Endpoints:
+        \\  /metrics                Prometheus metrics (http://0.0.0.0:9090/metrics)
+        \\  /health, /healthz       Health check endpoint
+        \\  /ready, /readyz         Readiness check endpoint
         \\
         \\Development/Testing Commands:
         \\  --test-run-pod          Create a test pod sandbox
@@ -283,6 +302,14 @@ pub fn main() !void {
         return;
     }
 
+    // Initialize metrics
+    var metrics = prometheus.initGlobal(allocator) catch |err| {
+        logging.err("Failed to initialize metrics: {}", .{err});
+        std.process.exit(1);
+    };
+    defer metrics.deinit();
+    logging.info("Metrics initialized", .{});
+
     // Initialize CRI services
     var runtime_svc = runtime_service.RuntimeService.init(
         allocator,
@@ -317,6 +344,20 @@ pub fn main() !void {
     };
     logging.info("Streaming server started on port {d}", .{args.streaming_port});
 
+    // Initialize and start metrics server
+    var metrics_srv = metrics_server.MetricsServer.init(
+        allocator,
+        metrics,
+        args.metrics_port,
+    );
+    defer metrics_srv.deinit();
+
+    metrics_srv.start() catch |err| {
+        logging.err("Failed to start metrics server: {}", .{err});
+        std.process.exit(1);
+    };
+    logging.info("Metrics server started on port {d}", .{args.metrics_port});
+
     // Initialize and start gRPC server
     var grpc_server = grpc.GrpcServer.init(
         allocator,
@@ -335,7 +376,12 @@ pub fn main() !void {
     };
 
     logging.info("gRPC server started, listening on {s}", .{args.socket_path});
+
+    // Mark runtime as ready
+    metrics.runtime_ready.set(1);
+    metrics.network_ready.set(1);
     logging.info("Ready to accept connections", .{});
+    logging.info("Metrics available at http://0.0.0.0:{d}/metrics", .{args.metrics_port});
 
     // Run the gRPC server main loop
     grpc_server.run() catch |err| {

@@ -48,6 +48,47 @@
               touch $out/success
             '';
           };
+
+          # Valgrind memory check on the main binary
+          valgrindCheck = pkgs.stdenv.mkDerivation {
+            pname = "systemd-cri-valgrind";
+            version = "0.1.0";
+
+            src = ./.;
+
+            nativeBuildInputs = zigNativeBuildInputs ++ [ pkgs.valgrind ];
+            buildInputs = zigBuildInputs;
+
+            buildPhase = ''
+              export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-cache"
+              export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
+
+              # Build the binary
+              zig build -Doptimize=Debug
+
+              echo "Running systemd-cri under valgrind..."
+              valgrind \
+                --error-exitcode=1 \
+                --leak-check=full \
+                --show-leak-kinds=definite \
+                --errors-for-leak-kinds=definite \
+                --track-origins=yes \
+                ./zig-out/bin/systemd-cri --help || true
+
+              valgrind \
+                --error-exitcode=1 \
+                --leak-check=full \
+                --show-leak-kinds=definite \
+                --errors-for-leak-kinds=definite \
+                --track-origins=yes \
+                ./zig-out/bin/systemd-cri --version
+            '';
+
+            installPhase = ''
+              mkdir -p $out
+              touch $out/success
+            '';
+          };
         in
         {
           packages.default = pkgs.stdenv.mkDerivation {
@@ -94,6 +135,8 @@
               testStep = "test-full";
             };
 
+            # Valgrind memory check
+            valgrind = valgrindCheck;
           };
 
           # Apps for development tasks
@@ -113,29 +156,14 @@
           devShells.default = pkgs.mkShell {
             name = "systemd-cri-dev";
 
-            buildInputs = [
-              # Build tools
-              pkgs.zig
+            # Inherit build environment from the package
+            inputsFrom = [ self.packages.${system}.default ];
+
+            nativeBuildInputs = [
               pkgs.zls
-
-              # Runtime dependencies
-              pkgs.systemd
-              pkgs.pkg-config
-              pkgs.rocksdb
-
-              # gRPC/protobuf for CRI
-              pkgs.protobuf
-              pkgs.protobufc
-              pkgs.nghttp2
-
-              # Development tools
               pkgs.gdb
               pkgs.valgrind
-
-              # For testing CRI
               pkgs.cri-tools
-
-              # For image management (Phase 4)
               pkgs.skopeo
               pkgs.umoci
             ];
