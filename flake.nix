@@ -93,6 +93,21 @@
               name = "full-integration-tests";
               testStep = "test-full";
             };
+
+          };
+
+          # Apps for development tasks
+          apps.update-proto = {
+            type = "app";
+            program = toString (pkgs.writeShellScript "update-proto" ''
+              set -euo pipefail
+
+              # Ensure we have the required tools
+              export PATH="${pkgs.lib.makeBinPath [ pkgs.curl pkgs.protobufc ]}"
+
+              # Run the update script
+              exec ${./scripts/update-proto.sh}
+            '');
           };
 
           devShells.default = pkgs.mkShell {
