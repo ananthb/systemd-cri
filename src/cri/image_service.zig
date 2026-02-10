@@ -30,43 +30,35 @@ pub const ImageService = struct {
         var images: std.ArrayList(types.Image) = .empty;
         errdefer images.deinit(self.allocator);
 
-        var stored_images = try self.store.listImages();
+        // Get images from the puller (which checks machined and local store)
+        var pulled_images = self.puller.listImages() catch {
+            return images; // Return empty list on error
+        };
         defer {
-            for (stored_images.items) |*img| {
+            for (pulled_images.items) |*img| {
                 img.deinit(self.allocator);
             }
-            stored_images.deinit(self.allocator);
+            pulled_images.deinit(self.allocator);
         }
 
-        for (stored_images.items) |img| {
+        for (pulled_images.items) |img| {
             // Apply filter if provided
             if (filter) |f| {
                 if (f.image) |filter_image| {
-                    var matches = false;
-                    for (img.repo_tags.items) |tag| {
-                        if (std.mem.eql(u8, tag, filter_image.image)) {
-                            matches = true;
-                            break;
-                        }
+                    if (!std.mem.eql(u8, img.id, filter_image.image)) {
+                        continue;
                     }
-                    if (!matches) continue;
                 }
             }
 
+            // Create repo_tags array with the image id as the tag
             var repo_tags: std.ArrayList([]const u8) = .empty;
-            for (img.repo_tags.items) |tag| {
-                try repo_tags.append(self.allocator, try self.allocator.dupe(u8, tag));
-            }
-
-            var repo_digests: std.ArrayList([]const u8) = .empty;
-            for (img.repo_digests.items) |digest| {
-                try repo_digests.append(self.allocator, try self.allocator.dupe(u8, digest));
-            }
+            try repo_tags.append(self.allocator, try self.allocator.dupe(u8, img.id));
 
             try images.append(self.allocator, types.Image{
                 .id = try self.allocator.dupe(u8, img.id),
                 .repo_tags = repo_tags.items,
-                .repo_digests = repo_digests.items,
+                .repo_digests = &.{},
                 .size = img.size,
                 .uid = null,
                 .username = null,
@@ -82,24 +74,40 @@ pub const ImageService = struct {
     pub fn imageStatus(self: *Self, image_spec: *const types.ImageSpec, verbose: bool) !?ImageStatusResponse {
         _ = verbose;
 
-        var img = self.store.getImage(image_spec.image) catch return null;
+        // Look up image via the puller (which checks machined)
+        var img = self.puller.getImageInfo(image_spec.image) catch return null;
         defer img.deinit(self.allocator);
 
+        // Create repo_tags with the original reference
+        // Normalize tag: if no tag or digest, add :latest
         var repo_tags: std.ArrayList([]const u8) = .empty;
-        for (img.repo_tags.items) |tag| {
-            try repo_tags.append(self.allocator, try self.allocator.dupe(u8, tag));
+        errdefer {
+            for (repo_tags.items) |t| self.allocator.free(t);
+            repo_tags.deinit(self.allocator);
         }
 
-        var repo_digests: std.ArrayList([]const u8) = .empty;
-        for (img.repo_digests.items) |digest| {
-            try repo_digests.append(self.allocator, try self.allocator.dupe(u8, digest));
+        const image_ref = image_spec.image;
+        // Check if reference has a tag (contains ':' after the last '/') or digest (contains '@')
+        const has_digest = std.mem.indexOf(u8, image_ref, "@") != null;
+        const last_slash = std.mem.lastIndexOf(u8, image_ref, "/");
+        const has_tag = if (last_slash) |slash_pos|
+            std.mem.indexOf(u8, image_ref[slash_pos..], ":") != null
+        else
+            std.mem.indexOf(u8, image_ref, ":") != null;
+
+        if (has_digest or has_tag) {
+            try repo_tags.append(self.allocator, try self.allocator.dupe(u8, image_ref));
+        } else {
+            // No tag specified, add :latest
+            const tag_with_latest = try std.fmt.allocPrint(self.allocator, "{s}:latest", .{image_ref});
+            try repo_tags.append(self.allocator, tag_with_latest);
         }
 
         return ImageStatusResponse{
             .image = types.Image{
                 .id = try self.allocator.dupe(u8, img.id),
-                .repo_tags = repo_tags.items,
-                .repo_digests = repo_digests.items,
+                .repo_tags = try repo_tags.toOwnedSlice(self.allocator),
+                .repo_digests = &.{},
                 .size = img.size,
                 .uid = null,
                 .username = null,
@@ -137,7 +145,12 @@ pub const ImageService = struct {
     /// Remove an image from the store
     pub fn removeImage(self: *Self, image_spec: *const types.ImageSpec) !void {
         logging.info("RemoveImage: {s}", .{image_spec.image});
-        try self.store.removeImage(image_spec.image);
+        // Remove from machined via the puller
+        self.puller.removeImage(image_spec.image) catch |err| {
+            logging.warn("Failed to remove image from machined: {}", .{err});
+        };
+        // Also try to remove from local store (may not exist)
+        self.store.removeImage(image_spec.image) catch {};
     }
 
     /// Get filesystem info for images

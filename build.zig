@@ -120,4 +120,26 @@ pub fn build(b: *std.Build) void {
 
     const full_integration_step = b.step("test-full", "Run full integration tests (requires root)");
     full_integration_step.dependOn(&run_full_integration_tests.step);
+
+    // critest runner tool
+    const critest_runner = b.addExecutable(.{
+        .name = "critest-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/critest_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    b.installArtifact(critest_runner);
+
+    const run_critest = b.addRunArtifact(critest_runner);
+    run_critest.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_critest.addArgs(args);
+    }
+
+    const critest_step = b.step("critest", "Run cri-tools tests against systemd-cri");
+    critest_step.dependOn(&run_critest.step);
 }

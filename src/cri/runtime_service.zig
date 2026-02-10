@@ -102,7 +102,12 @@ pub const RuntimeService = struct {
         return PodSandboxStatusResponse{
             .status = .{
                 .id = pod_status.id,
-                .metadata = null, // Would need to load from store
+                .metadata = .{
+                    .name = pod_status.name,
+                    .uid = pod_status.uid,
+                    .namespace = pod_status.namespace,
+                    .attempt = 0,
+                },
                 .state = switch (pod_status.state) {
                     .ready => .sandbox_ready,
                     else => .sandbox_notready,
@@ -176,6 +181,40 @@ pub const RuntimeService = struct {
     ) ![]const u8 {
         _ = sandbox_config;
 
+        // Convert mounts if present
+        var mounts: ?[]const container.Mount = null;
+        if (config.mounts.len > 0) {
+            var mount_list = try self.allocator.alloc(container.Mount, config.mounts.len);
+            for (config.mounts, 0..) |m, i| {
+                mount_list[i] = .{
+                    .container_path = m.container_path,
+                    .host_path = m.host_path,
+                    .readonly = m.readonly,
+                    .propagation = switch (m.propagation) {
+                        .propagation_private => .private,
+                        .propagation_host_to_container => .host_to_container,
+                        .propagation_bidirectional => .bidirectional,
+                    },
+                };
+            }
+            mounts = mount_list;
+        }
+
+        // Convert linux security context if present
+        var linux_config: ?container.LinuxContainerConfig = null;
+        if (config.linux) |linux| {
+            if (linux.security_context) |sec| {
+                linux_config = .{
+                    .security_context = .{
+                        .privileged = sec.privileged,
+                        .run_as_user = if (sec.run_as_user) |u| u.value else null,
+                        .run_as_group = if (sec.run_as_group) |g| g.value else null,
+                        .readonly_rootfs = sec.readonly_rootfs,
+                    },
+                };
+            }
+        }
+
         const container_config = container.ContainerConfig{
             .name = config.metadata.name,
             .image = .{
@@ -192,9 +231,11 @@ pub const RuntimeService = struct {
                 }
                 break :blk envs;
             } else null,
+            .mounts = mounts,
             .labels = config.labels,
             .annotations = config.annotations,
             .log_path = config.log_path,
+            .linux = linux_config,
         };
 
         return try self.container_manager.createContainer(pod_sandbox_id, &container_config);
@@ -215,6 +256,29 @@ pub const RuntimeService = struct {
     pub fn containerStatus(self: *Self, container_id: []const u8) !ContainerStatusResponse {
         var cont = try self.container_manager.containerStatus(container_id);
         defer cont.deinit(self.allocator);
+
+        // Parse mounts from JSON if present and convert to types.Mount
+        var mounts: ?[]types.Mount = null;
+        if (cont.mounts_json) |mj| {
+            const container_mounts = container.deserializeMounts(self.allocator, mj) catch null;
+            if (container_mounts) |cm| {
+                if (cm.len > 0) {
+                    mounts = try self.allocator.alloc(types.Mount, cm.len);
+                    for (cm, 0..) |m, i| {
+                        mounts.?[i] = .{
+                            .container_path = m.container_path,
+                            .host_path = m.host_path,
+                            .readonly = m.readonly,
+                            .propagation = switch (m.propagation) {
+                                .private => .propagation_private,
+                                .host_to_container => .propagation_host_to_container,
+                                .bidirectional => .propagation_bidirectional,
+                            },
+                        };
+                    }
+                }
+            }
+        }
 
         return ContainerStatusResponse{
             .status = .{
@@ -239,7 +303,7 @@ pub const RuntimeService = struct {
                 .message = null,
                 .labels = null,
                 .annotations = null,
-                .mounts = null,
+                .mounts = mounts,
                 .log_path = if (cont.log_path) |lp| try self.allocator.dupe(u8, lp) else null,
                 .resources = null,
             },
@@ -322,7 +386,7 @@ pub const PodSandboxStatusResponse = struct {
 
 pub const PodSandboxStatus = struct {
     id: []const u8,
-    metadata: ?types.PodSandboxMetadata,
+    metadata: types.PodSandboxMetadata,
     state: types.PodSandboxState,
     created_at: i64,
     network: ?PodSandboxNetworkStatus,

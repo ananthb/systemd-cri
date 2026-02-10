@@ -5,6 +5,7 @@ const properties = @import("../systemd/properties.zig");
 const store = @import("../state/store.zig");
 const uuid = @import("../util/uuid.zig");
 const logging = @import("../util/logging.zig");
+const cni = @import("../network/cni.zig");
 
 pub const PodError = error{
     CreateFailed,
@@ -73,6 +74,9 @@ pub const NamespaceMode = enum {
 /// Pod sandbox status
 pub const PodStatus = struct {
     id: []const u8,
+    name: []const u8,
+    uid: []const u8,
+    namespace: []const u8,
     state: store.PodState,
     created_at: i64,
     network: ?NetworkStatus = null,
@@ -99,16 +103,40 @@ pub const PodManager = struct {
     bus: *dbus.Bus,
     systemd_manager: manager.Manager,
     state_store: *store.Store,
+    cni_plugin: ?*cni.Cni,
+    network_config: ?cni.NetworkConfig = null,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, bus: *dbus.Bus, state_store: *store.Store) Self {
+    pub fn init(allocator: std.mem.Allocator, bus: *dbus.Bus, state_store: *store.Store, cni_plugin: ?*cni.Cni) Self {
         return Self{
             .allocator = allocator,
             .bus = bus,
             .systemd_manager = manager.Manager.init(bus, allocator),
             .state_store = state_store,
+            .cni_plugin = cni_plugin,
+            .network_config = null,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.network_config) |*cfg| {
+            cfg.deinit(self.allocator);
+        }
+    }
+
+    /// Load and cache the network configuration
+    fn ensureNetworkConfig(self: *Self) !*cni.NetworkConfig {
+        if (self.network_config) |*cfg| {
+            return cfg;
+        }
+
+        if (self.cni_plugin) |plugin| {
+            self.network_config = try plugin.loadNetworkConfig(null);
+            return &self.network_config.?;
+        }
+
+        return cni.CniError.ConfigNotFound;
     }
 
     /// Create and run a new pod sandbox
@@ -198,6 +226,68 @@ pub const PodManager = struct {
             }
         }
 
+        // Set up networking via CNI
+        var network_namespace: ?[]const u8 = null;
+        var pod_ip: ?[]const u8 = null;
+        var pod_gateway: ?[]const u8 = null;
+
+        // Check if we should use host network
+        const use_host_network = if (config.linux) |linux| blk: {
+            if (linux.security_context) |sec_ctx| {
+                if (sec_ctx.namespace_options) |ns_opts| {
+                    break :blk ns_opts.network == .node;
+                }
+            }
+            break :blk false;
+        } else false;
+
+        if (!use_host_network and self.cni_plugin != null) {
+            // Create network namespace
+            const netns_name = std.fmt.allocPrint(self.allocator, "cri-{s}", .{pod_id[0..8]}) catch return PodError.OutOfMemory;
+            defer self.allocator.free(netns_name);
+
+            if (cni.createNetns(self.allocator, netns_name)) |ns_path| {
+                network_namespace = ns_path;
+
+                // Set up networking
+                if (self.ensureNetworkConfig()) |net_config| {
+                    if (self.cni_plugin.?.setupNetwork(
+                        pod_id,
+                        config.name,
+                        config.namespace,
+                        ns_path,
+                        "eth0",
+                        net_config,
+                    )) |result| {
+                        var cni_result = result;
+                        defer cni_result.deinit(self.allocator);
+
+                        // Extract IP address (strip CIDR notation if present)
+                        if (cni_result.getIp()) |ip| {
+                            const ip_only = if (std.mem.indexOf(u8, ip, "/")) |idx|
+                                self.allocator.dupe(u8, ip[0..idx]) catch return PodError.OutOfMemory
+                            else
+                                self.allocator.dupe(u8, ip) catch return PodError.OutOfMemory;
+                            pod_ip = ip_only;
+                        }
+
+                        if (cni_result.getGateway()) |gw| {
+                            pod_gateway = self.allocator.dupe(u8, gw) catch return PodError.OutOfMemory;
+                        }
+
+                        logging.info("Pod {s} assigned IP: {s}", .{ pod_id, pod_ip orelse "none" });
+                    } else |err| {
+                        logging.warn("CNI setup failed: {}, continuing without network", .{err});
+                    }
+                } else |err| {
+                    logging.warn("Failed to load CNI config: {}", .{err});
+                }
+            } else |err| {
+                logging.warn("Failed to create network namespace: {}", .{err});
+                // Continue without network isolation if CNI fails
+            }
+        }
+
         var pod_state = store.PodSandbox{
             .id = pod_id,
             .name = self.allocator.dupe(u8, config.name) catch return PodError.OutOfMemory,
@@ -206,7 +296,9 @@ pub const PodManager = struct {
             .state = .ready,
             .created_at = std.time.timestamp(),
             .unit_name = self.allocator.dupe(u8, unit_name) catch return PodError.OutOfMemory,
-            .network_namespace = null, // TODO: Set up network namespace via CNI
+            .network_namespace = network_namespace,
+            .pod_ip = pod_ip,
+            .pod_gateway = pod_gateway,
             .labels = labels,
             .annotations = annotations,
         };
@@ -258,6 +350,29 @@ pub const PodManager = struct {
             self.stopPodSandbox(pod_id) catch {};
         }
 
+        // Tear down networking via CNI
+        if (pod.network_namespace) |ns_path| {
+            if (self.cni_plugin) |plugin| {
+                if (self.network_config) |*net_config| {
+                    plugin.teardownNetwork(
+                        pod_id,
+                        pod.name,
+                        pod.namespace,
+                        ns_path,
+                        "eth0",
+                        net_config,
+                    );
+                }
+            }
+
+            // Delete network namespace
+            // Extract netns name from path (e.g., /var/run/netns/cri-abcd1234 -> cri-abcd1234)
+            if (std.mem.lastIndexOf(u8, ns_path, "/")) |idx| {
+                const netns_name = ns_path[idx + 1 ..];
+                cni.deleteNetns(self.allocator, netns_name);
+            }
+        }
+
         // Create null-terminated unit name
         const unit_name_z = self.allocator.dupeZ(u8, pod.unit_name) catch return PodError.OutOfMemory;
         defer self.allocator.free(unit_name_z);
@@ -267,9 +382,6 @@ pub const PodManager = struct {
 
         // Delete pod state
         self.state_store.deletePod(pod_id) catch return PodError.StoreError;
-
-        // TODO: Clean up network namespace via CNI
-        // TODO: Clean up any pod-level resources
     }
 
     /// Get pod sandbox status
@@ -306,9 +418,15 @@ pub const PodManager = struct {
 
         return PodStatus{
             .id = self.allocator.dupe(u8, pod_id) catch return PodError.OutOfMemory,
+            .name = self.allocator.dupe(u8, pod.name) catch return PodError.OutOfMemory,
+            .uid = self.allocator.dupe(u8, pod.uid) catch return PodError.OutOfMemory,
+            .namespace = self.allocator.dupe(u8, pod.namespace) catch return PodError.OutOfMemory,
             .state = current_state,
             .created_at = pod.created_at,
-            .network = null, // TODO: Get from CNI
+            .network = if (pod.pod_ip) |ip| NetworkStatus{
+                .ip = self.allocator.dupe(u8, ip) catch return PodError.OutOfMemory,
+                .additional_ips = &.{},
+            } else null,
             .linux = if (pod.network_namespace) |ns| LinuxPodStatus{
                 .namespaces = Namespaces{
                     .network = self.allocator.dupe(u8, ns) catch return PodError.OutOfMemory,

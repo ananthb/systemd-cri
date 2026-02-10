@@ -236,10 +236,67 @@ pub const MachineImageManager = struct {
             return MachineImageError.DbusError;
         }
 
-        // Get timestamps - these may fail on some image types
-        const creation_time: u64 = 0;
-        const modification_time: u64 = 0;
-        const disk_usage: u64 = 0;
+        // Get timestamps and usage - these may fail on some image types
+        var creation_time: u64 = 0;
+        var modification_time: u64 = 0;
+        var disk_usage: u64 = 0;
+
+        // Get CreationTimestamp property
+        blk: {
+            err.deinit();
+            err = dbus.Error.init();
+            var ts_reply = self.bus.getProperty(
+                MACHINE1_DEST,
+                path_z,
+                "org.freedesktop.machine1.Image",
+                "CreationTimestamp",
+                &err,
+                "t",
+            ) catch break :blk;
+            defer ts_reply.deinit();
+            var ts: u64 = 0;
+            if (dbus.raw.sd_bus_message_read(ts_reply.inner, "t", &ts) >= 0) {
+                creation_time = ts;
+            }
+        }
+
+        // Get ModificationTimestamp property
+        blk: {
+            err.deinit();
+            err = dbus.Error.init();
+            var ts_reply = self.bus.getProperty(
+                MACHINE1_DEST,
+                path_z,
+                "org.freedesktop.machine1.Image",
+                "ModificationTimestamp",
+                &err,
+                "t",
+            ) catch break :blk;
+            defer ts_reply.deinit();
+            var ts: u64 = 0;
+            if (dbus.raw.sd_bus_message_read(ts_reply.inner, "t", &ts) >= 0) {
+                modification_time = ts;
+            }
+        }
+
+        // Get Usage property (disk usage in bytes)
+        blk: {
+            err.deinit();
+            err = dbus.Error.init();
+            var usage_reply = self.bus.getProperty(
+                MACHINE1_DEST,
+                path_z,
+                "org.freedesktop.machine1.Image",
+                "Usage",
+                &err,
+                "t",
+            ) catch break :blk;
+            defer usage_reply.deinit();
+            var usage: u64 = 0;
+            if (dbus.raw.sd_bus_message_read(usage_reply.inner, "t", &usage) >= 0) {
+                disk_usage = usage;
+            }
+        }
 
         return MachineImage{
             .name = self.allocator.dupe(u8, name) catch return MachineImageError.OutOfMemory,
@@ -319,7 +376,7 @@ pub const MachineImageManager = struct {
     }
 
     /// Import a filesystem directory as an image
-    /// Uses org.freedesktop.import1.Manager.ImportFileSystem
+    /// Uses org.freedesktop.import1.Manager.ImportFileSystem and polls for completion
     pub fn importFileSystem(self: *Self, path: []const u8, name: []const u8, read_only: bool) MachineImageError!void {
         logging.info("Importing filesystem as image: {s} -> {s}", .{ path, name });
 
@@ -363,13 +420,71 @@ pub const MachineImageManager = struct {
         };
         defer reply.deinit();
 
-        // Get transfer ID (we don't wait for completion - import is synchronous for directories)
+        // Get transfer ID and path
         var transfer_id: u32 = 0;
         if (dbus.raw.sd_bus_message_read(reply.inner, "u", &transfer_id) < 0) {
             return MachineImageError.DbusError;
         }
 
-        logging.debug("Import completed, transfer ID: {d}", .{transfer_id});
+        const transfer_path = reply.readObjectPath() catch return MachineImageError.DbusError;
+        logging.debug("Import started, transfer ID: {d}, path: {s}", .{ transfer_id, transfer_path });
+
+        // Poll for completion - check if the image exists
+        // The import is usually fast for filesystem imports, but we poll to be safe
+        const max_attempts = 300; // 30 seconds max (100ms per attempt)
+        var attempts: u32 = 0;
+
+        while (attempts < max_attempts) : (attempts += 1) {
+            // Check if image now exists
+            if (self.imageExists(name)) {
+                logging.debug("Import completed successfully after {d} attempts", .{attempts});
+                return;
+            }
+
+            // Check if transfer is still running by querying its progress
+            if (!self.isTransferActive(transfer_path)) {
+                // Transfer finished but image doesn't exist - check one more time
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                if (self.imageExists(name)) {
+                    logging.debug("Import completed successfully", .{});
+                    return;
+                }
+                logging.err("Import transfer completed but image not found", .{});
+                return MachineImageError.ImportFailed;
+            }
+
+            // Wait before next poll
+            std.Thread.sleep(100 * std.time.ns_per_ms);
+        }
+
+        logging.err("Import timed out after {d} attempts", .{max_attempts});
+        return MachineImageError.ImportFailed;
+    }
+
+    /// Check if a transfer is still active
+    fn isTransferActive(self: *Self, transfer_path: []const u8) bool {
+        const path_z = self.allocator.dupeZ(u8, transfer_path) catch return false;
+        defer self.allocator.free(path_z);
+
+        var err = dbus.Error.init();
+        defer err.deinit();
+
+        // Try to get the Progress property - if the transfer is gone, this will fail
+        var reply = self.bus.getProperty(
+            IMPORT1_DEST,
+            path_z,
+            "org.freedesktop.import1.Transfer",
+            "Progress",
+            &err,
+            "d",
+        ) catch {
+            // Transfer object no longer exists - transfer is complete
+            return false;
+        };
+        defer reply.deinit();
+
+        // Transfer still exists
+        return true;
     }
 
     /// Mark an image as read-only

@@ -34,14 +34,24 @@ pub const ExecResponse = struct {
     }
 };
 
+/// Session type for streaming sessions
+pub const SessionType = enum {
+    exec,
+    attach,
+    port_forward,
+};
+
 /// Streaming exec session
 pub const ExecSession = struct {
+    session_type: SessionType,
     id: []const u8,
     container_id: []const u8,
     cmd: []const []const u8,
     tty: bool,
     stdin: bool,
     created_at: i64,
+    // For port forwarding
+    ports: []i32,
     // For streaming, we'd hold file descriptors here
     process: ?std.process.Child = null,
 
@@ -52,6 +62,9 @@ pub const ExecSession = struct {
             allocator.free(arg);
         }
         allocator.free(self.cmd);
+        if (self.ports.len > 0) {
+            allocator.free(self.ports);
+        }
     }
 };
 
@@ -128,10 +141,47 @@ pub const Executor = struct {
         args.append(self.allocator, "-i") catch return ExecError.OutOfMemory; // IPC
         args.append(self.allocator, "-n") catch return ExecError.OutOfMemory; // network
         args.append(self.allocator, "-p") catch return ExecError.OutOfMemory; // PID
+        args.append(self.allocator, "-r") catch return ExecError.OutOfMemory; // use target process's root directory
+        args.append(self.allocator, "-w") catch return ExecError.OutOfMemory; // use target process's working directory
 
         // Add the command to execute
-        for (cmd) |arg| {
-            args.append(self.allocator, arg) catch return ExecError.OutOfMemory;
+        // nsenter doesn't search PATH, so we need to use absolute paths
+        // If the command is a shell (sh, bash, ash), use the absolute path
+        for (cmd, 0..) |arg, i| {
+            if (i == 0) {
+                // For the first argument (the command), ensure we use absolute path
+                if (std.mem.eql(u8, arg, "sh") or std.mem.eql(u8, arg, "ash")) {
+                    args.append(self.allocator, "/bin/sh") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "bash")) {
+                    args.append(self.allocator, "/bin/bash") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "cat")) {
+                    args.append(self.allocator, "/bin/cat") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "hostname")) {
+                    args.append(self.allocator, "/bin/hostname") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "id")) {
+                    args.append(self.allocator, "/usr/bin/id") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "touch")) {
+                    args.append(self.allocator, "/bin/touch") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "ls")) {
+                    args.append(self.allocator, "/bin/ls") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "echo")) {
+                    args.append(self.allocator, "/bin/echo") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "grep")) {
+                    args.append(self.allocator, "/bin/grep") catch return ExecError.OutOfMemory;
+                } else if (std.mem.eql(u8, arg, "sleep")) {
+                    args.append(self.allocator, "/bin/sleep") catch return ExecError.OutOfMemory;
+                } else if (arg.len > 0 and arg[0] == '/') {
+                    // Already an absolute path
+                    args.append(self.allocator, arg) catch return ExecError.OutOfMemory;
+                } else {
+                    // For other commands, try /bin/ prefix
+                    const abs_path = std.fmt.allocPrint(self.allocator, "/bin/{s}", .{arg}) catch return ExecError.OutOfMemory;
+                    defer self.allocator.free(abs_path);
+                    args.append(self.allocator, abs_path) catch return ExecError.OutOfMemory;
+                }
+            } else {
+                args.append(self.allocator, arg) catch return ExecError.OutOfMemory;
+            }
         }
 
         // Execute
@@ -189,9 +239,7 @@ pub const Executor = struct {
         }
 
         // Generate session ID
-        var id_buf: [36]u8 = undefined;
-        uuid.generate(&id_buf);
-        const session_id = self.allocator.dupe(u8, &id_buf) catch return ExecError.OutOfMemory;
+        const session_id = uuid.generateString(self.allocator) catch return ExecError.OutOfMemory;
         errdefer self.allocator.free(session_id);
 
         // Copy command arguments
@@ -203,12 +251,14 @@ pub const Executor = struct {
         }
 
         const session = ExecSession{
+            .session_type = .exec,
             .id = session_id,
             .container_id = self.allocator.dupe(u8, container_id) catch return ExecError.OutOfMemory,
             .cmd = cmd_copy,
             .tty = tty,
             .stdin = stdin,
             .created_at = std.time.timestamp(),
+            .ports = &.{},
             .process = null,
         };
 
@@ -233,10 +283,100 @@ pub const Executor = struct {
     ) ExecError![]const u8 {
         logging.info("Creating attach session for container {s}", .{container_id});
 
-        // For attach, we create an exec session that connects to the container's
-        // main process stdin/stdout/stderr
-        const cmd = &[_][]const u8{};
-        return self.exec(container_id, cmd, tty, stdin);
+        // Verify container exists and is running
+        const container_info = self.state_store.getContainer(container_id) catch {
+            return ExecError.ContainerNotFound;
+        };
+        defer {
+            var c = container_info;
+            c.deinit(self.allocator);
+        }
+
+        if (container_info.state != .running) {
+            return ExecError.ContainerNotRunning;
+        }
+
+        // Generate session ID
+        const session_id = uuid.generateString(self.allocator) catch return ExecError.OutOfMemory;
+        errdefer self.allocator.free(session_id);
+
+        const session = ExecSession{
+            .session_type = .attach,
+            .id = session_id,
+            .container_id = self.allocator.dupe(u8, container_id) catch return ExecError.OutOfMemory,
+            .cmd = &.{},
+            .tty = tty,
+            .stdin = stdin,
+            .created_at = std.time.timestamp(),
+            .ports = &.{},
+            .process = null,
+        };
+
+        self.sessions.put(session_id, session) catch return ExecError.OutOfMemory;
+
+        // Return the streaming URL
+        const url = std.fmt.allocPrint(
+            self.allocator,
+            "/attach/{s}",
+            .{session_id},
+        ) catch return ExecError.OutOfMemory;
+
+        return url;
+    }
+
+    /// Create a port forward session
+    pub fn portForward(
+        self: *Self,
+        pod_sandbox_id: []const u8,
+        ports: []i32,
+    ) ExecError![]const u8 {
+        logging.info("Creating port forward session for pod {s}", .{pod_sandbox_id});
+
+        // Verify pod exists - we check for a container in this pod
+        // PortForward uses pod_sandbox_id, which corresponds to the pod's infra container
+        const pod_info = self.state_store.loadPod(pod_sandbox_id) catch {
+            return ExecError.ContainerNotFound;
+        };
+        defer {
+            var p = pod_info;
+            p.deinit(self.allocator);
+        }
+
+        if (pod_info.state != .ready) {
+            return ExecError.ContainerNotRunning;
+        }
+
+        // Generate session ID
+        const session_id = uuid.generateString(self.allocator) catch return ExecError.OutOfMemory;
+        errdefer self.allocator.free(session_id);
+
+        // Copy ports
+        const ports_copy = self.allocator.alloc(i32, ports.len) catch return ExecError.OutOfMemory;
+        errdefer self.allocator.free(ports_copy);
+        @memcpy(ports_copy, ports);
+
+        const session = ExecSession{
+            .session_type = .port_forward,
+            .id = session_id,
+            .container_id = self.allocator.dupe(u8, pod_sandbox_id) catch return ExecError.OutOfMemory,
+            .cmd = &.{},
+            .tty = false,
+            .stdin = false,
+            .created_at = std.time.timestamp(),
+            .ports = ports_copy,
+            .process = null,
+        };
+
+        self.sessions.put(session_id, session) catch return ExecError.OutOfMemory;
+
+        // Return the streaming URL
+        const url = std.fmt.allocPrint(
+            self.allocator,
+            "/portforward/{s}",
+            .{session_id},
+        ) catch return ExecError.OutOfMemory;
+
+        return url;
     }
 
     /// Get an exec session by ID

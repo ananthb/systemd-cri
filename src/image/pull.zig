@@ -179,51 +179,30 @@ pub const ImagePuller = struct {
         const rootfs_path = std.fs.path.join(self.allocator, &.{ bundle_dir, "rootfs" }) catch return PullError.OutOfMemory;
         defer self.allocator.free(rootfs_path);
 
-        // Import into systemd-machined if available
-        if (self.machined_manager) |*mgr| {
-            logging.info("Importing into systemd-machined as: {s}", .{machine_name});
-            mgr.importFileSystem(rootfs_path, machine_name, true) catch |err| {
-                logging.warn("Failed to import to machined: {}, falling back to local storage", .{err});
-                // Fall through to local storage
-            };
+        // Import into systemd-machined (required)
+        const mgr = &(self.machined_manager orelse {
+            logging.err("systemd-machined not available, cannot store image", .{});
+            return PullError.ImportFailed;
+        });
 
-            // Verify the import worked
-            if (mgr.imageExists(machine_name)) {
-                logging.info("Image imported successfully: {s}", .{machine_name});
-                // Clean up temp files
-                std.fs.deleteTreeAbsolute(oci_dir) catch {};
-                std.fs.deleteTreeAbsolute(bundle_dir) catch {};
-                return machine_name;
-            }
-        }
-
-        // Fallback: copy rootfs to our local store
-        const local_image_path = std.fs.path.join(self.allocator, &.{
-            self.image_store.base_path,
-            "images",
-            "rootfs",
-            machine_name,
-        }) catch return PullError.OutOfMemory;
-        defer self.allocator.free(local_image_path);
-
-        // Create parent directories
-        if (std.fs.path.dirname(local_image_path)) |parent| {
-            std.fs.makeDirAbsolute(parent) catch |e| {
-                if (e != error.PathAlreadyExists) return PullError.ExtractFailed;
-            };
-        }
-
-        // Move rootfs to final location
-        std.fs.renameAbsolute(rootfs_path, local_image_path) catch {
-            // If rename fails, try copying (different filesystem)
-            copyDirectory(rootfs_path, local_image_path) catch return PullError.ExtractFailed;
+        logging.info("Importing into systemd-machined as: {s}", .{machine_name});
+        mgr.importFileSystem(rootfs_path, machine_name, true) catch |err| {
+            logging.err("Failed to import to machined: {}", .{err});
+            return PullError.ImportFailed;
         };
+
+        // Verify the import worked
+        if (!mgr.imageExists(machine_name)) {
+            logging.err("Image import verification failed: {s}", .{machine_name});
+            return PullError.ImportFailed;
+        }
+
+        logging.info("Image imported successfully: {s}", .{machine_name});
 
         // Clean up temp files
         std.fs.deleteTreeAbsolute(oci_dir) catch {};
         std.fs.deleteTreeAbsolute(bundle_dir) catch {};
 
-        logging.info("Image pulled successfully: {s}", .{machine_name});
         return machine_name;
     }
 
@@ -239,7 +218,7 @@ pub const ImagePuller = struct {
         for (ref.repository) |char| {
             if (std.ascii.isAlphanumeric(char)) {
                 try w.writeByte(std.ascii.toLower(char));
-            } else if (char == '/' or char == '_' or char == '.') {
+            } else if (char == '/' or char == '_' or char == '.' or char == '-') {
                 try w.writeByte('-');
             }
         }
@@ -251,7 +230,7 @@ pub const ImagePuller = struct {
                 for (tag) |char| {
                     if (std.ascii.isAlphanumeric(char)) {
                         try w.writeByte(std.ascii.toLower(char));
-                    } else if (char == '.' or char == '_') {
+                    } else if (char == '.' or char == '_' or char == '-') {
                         try w.writeByte('-');
                     }
                 }
@@ -270,8 +249,10 @@ pub const ImagePuller = struct {
         return result;
     }
 
-    /// Check if an image exists locally
+    /// Check if an image exists in machined
     pub fn imageExists(self: *Self, image_ref: []const u8) bool {
+        const mgr = &(self.machined_manager orelse return false);
+
         // Parse reference to get machine name
         var ref = store.ImageReference.parse(self.allocator, image_ref) catch return false;
         defer ref.deinit(self.allocator);
@@ -279,80 +260,78 @@ pub const ImagePuller = struct {
         const machine_name = self.generateMachineName(&ref) catch return false;
         defer self.allocator.free(machine_name);
 
-        // Check machined first
-        if (self.machined_manager) |*mgr| {
-            if (mgr.imageExists(machine_name)) {
-                return true;
-            }
-        }
-
-        // Check local store
-        const local_path = std.fs.path.join(self.allocator, &.{
-            self.image_store.base_path,
-            "images",
-            "rootfs",
-            machine_name,
-        }) catch return false;
-        defer self.allocator.free(local_path);
-
-        std.fs.accessAbsolute(local_path, .{}) catch return false;
-        return true;
+        return mgr.imageExists(machine_name);
     }
 
-    /// Get the rootfs path for an image
+    /// Get the rootfs path for an image (from machined)
     pub fn getImageRootfs(self: *Self, image_ref: []const u8) ![]const u8 {
+        const mgr = &(self.machined_manager orelse return error.NotFound);
+
         var ref = store.ImageReference.parse(self.allocator, image_ref) catch return error.InvalidImage;
         defer ref.deinit(self.allocator);
 
         const machine_name = self.generateMachineName(&ref) catch return error.OutOfMemory;
         defer self.allocator.free(machine_name);
 
-        // Check machined first - images are in /var/lib/machines/<name>
-        if (self.machined_manager) |*mgr| {
-            if (mgr.imageExists(machine_name)) {
-                return std.fmt.allocPrint(self.allocator, "/var/lib/machines/{s}", .{machine_name});
-            }
+        if (!mgr.imageExists(machine_name)) {
+            return error.NotFound;
         }
 
-        // Check local store
-        return std.fs.path.join(self.allocator, &.{
-            self.image_store.base_path,
-            "images",
-            "rootfs",
-            machine_name,
-        });
+        // Images are stored in /var/lib/machines/<name>
+        return std.fmt.allocPrint(self.allocator, "/var/lib/machines/{s}", .{machine_name});
     }
 
-    /// Remove an image
+    /// Remove an image from machined
+    /// Accepts either full image reference (registry/name:tag) or machine name directly
     pub fn removeImage(self: *Self, image_ref: []const u8) !void {
-        var ref = store.ImageReference.parse(self.allocator, image_ref) catch return error.InvalidImage;
-        defer ref.deinit(self.allocator);
+        const mgr = &(self.machined_manager orelse return error.NotFound);
 
-        const machine_name = self.generateMachineName(&ref) catch return error.OutOfMemory;
-        defer self.allocator.free(machine_name);
+        // First try to parse as full image reference
+        if (store.ImageReference.parse(self.allocator, image_ref)) |ref_val| {
+            var ref = ref_val;
+            defer ref.deinit(self.allocator);
+            const machine_name = self.generateMachineName(&ref) catch return error.OutOfMemory;
+            defer self.allocator.free(machine_name);
 
-        // Try machined first
-        if (self.machined_manager) |*mgr| {
+            logging.info("Removing image: {s} (machine name: {s})", .{ image_ref, machine_name });
             mgr.removeImage(machine_name) catch |err| {
                 if (err != machined.MachineImageError.NotFound) {
                     return error.RemoveFailed;
                 }
             };
+        } else |_| {
+            // If parsing fails, assume image_ref is already a machine name
+            logging.info("Removing image by machine name: {s}", .{image_ref});
+            mgr.removeImage(image_ref) catch |err| {
+                if (err != machined.MachineImageError.NotFound) {
+                    return error.RemoveFailed;
+                }
+            };
         }
-
-        // Also try local store
-        const local_path = std.fs.path.join(self.allocator, &.{
-            self.image_store.base_path,
-            "images",
-            "rootfs",
-            machine_name,
-        }) catch return error.OutOfMemory;
-        defer self.allocator.free(local_path);
-
-        std.fs.deleteTreeAbsolute(local_path) catch {};
     }
 
-    /// List all available images
+    /// Get image info by reference
+    /// Converts the reference to a machine name and looks up in machined
+    pub fn getImageInfo(self: *Self, image_ref: []const u8) !ImageInfo {
+        const mgr = &(self.machined_manager orelse return error.NotFound);
+
+        var ref = store.ImageReference.parse(self.allocator, image_ref) catch return error.InvalidImage;
+        defer ref.deinit(self.allocator);
+
+        const machine_name = self.generateMachineName(&ref) catch return error.OutOfMemory;
+        defer self.allocator.free(machine_name);
+
+        var img = mgr.getImage(machine_name) catch return error.NotFound;
+        defer img.deinit(self.allocator);
+
+        return ImageInfo{
+            .id = try self.allocator.dupe(u8, img.name),
+            .size = img.disk_usage,
+            .created_at = @intCast(img.creation_time / 1_000_000), // usec to sec
+        };
+    }
+
+    /// List all available images from machined
     pub fn listImages(self: *Self) !std.ArrayList(ImageInfo) {
         var images: std.ArrayList(ImageInfo) = .empty;
         errdefer {
@@ -362,27 +341,24 @@ pub const ImagePuller = struct {
             images.deinit(self.allocator);
         }
 
-        // List from machined
-        if (self.machined_manager) |*mgr| {
-            var machined_images = mgr.listImages() catch std.ArrayList(machined.MachineImage).empty;
-            defer {
-                for (machined_images.items) |*img| {
-                    img.deinit(self.allocator);
-                }
-                machined_images.deinit(self.allocator);
-            }
+        const mgr = &(self.machined_manager orelse return images);
 
+        var machined_images = mgr.listImages() catch return images;
+        defer {
             for (machined_images.items) |*img| {
-                const info = ImageInfo{
-                    .id = try self.allocator.dupe(u8, img.name),
-                    .size = img.disk_usage,
-                    .created_at = @intCast(img.creation_time / 1_000_000), // usec to sec
-                };
-                try images.append(self.allocator, info);
+                img.deinit(self.allocator);
             }
+            machined_images.deinit(self.allocator);
         }
 
-        // TODO: Also list from local store
+        for (machined_images.items) |*img| {
+            const info = ImageInfo{
+                .id = try self.allocator.dupe(u8, img.name),
+                .size = img.disk_usage,
+                .created_at = @intCast(img.creation_time / 1_000_000), // usec to sec
+            };
+            try images.append(self.allocator, info);
+        }
 
         return images;
     }
@@ -460,12 +436,3 @@ fn findExecutable(allocator: std.mem.Allocator, name: []const u8) ![]const u8 {
     return error.NotFound;
 }
 
-fn copyDirectory(src: []const u8, dst: []const u8) !void {
-    // Use cp -a for now (handles permissions, symlinks, etc.)
-    const allocator = std.heap.page_allocator;
-    const args = [_][]const u8{ "cp", "-a", src, dst };
-    const result = runCommand(allocator, &args) catch return error.CopyFailed;
-    allocator.free(result.stdout);
-    allocator.free(result.stderr);
-    if (result.exit_code != 0) return error.CopyFailed;
-}

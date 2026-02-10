@@ -108,6 +108,57 @@ pub const Manager = struct {
         };
     }
 
+    /// Start a transient service unit with context
+    /// Returns the job object path
+    pub fn startTransientServiceWithContext(
+        self: *Self,
+        name: [*:0]const u8,
+        mode: [*:0]const u8,
+        context: anytype,
+        comptime configureFn: fn (*properties.PropertyBuilder, @TypeOf(context)) anyerror!void,
+    ) ManagerError![]const u8 {
+        // Create method call message
+        const msg = self.bus.callMethodRaw(
+            SYSTEMD_DEST,
+            SYSTEMD_PATH,
+            MANAGER_IFACE,
+            "StartTransientUnit",
+        ) catch return ManagerError.CallFailed;
+        defer _ = c.sd_bus_message_unref(msg);
+
+        // Append unit name
+        var r = c.sd_bus_message_append(msg, "s", name);
+        if (r < 0) return ManagerError.CallFailed;
+
+        // Append mode (e.g., "fail", "replace")
+        r = c.sd_bus_message_append(msg, "s", mode);
+        if (r < 0) return ManagerError.CallFailed;
+
+        // Build properties
+        var builder = properties.PropertyBuilder.begin(msg) catch return ManagerError.CallFailed;
+        configureFn(&builder, context) catch return ManagerError.CallFailed;
+        builder.end() catch return ManagerError.CallFailed;
+
+        // Append empty auxiliary units array
+        properties.appendEmptyAuxUnits(msg) catch return ManagerError.CallFailed;
+
+        // Call the method
+        var err = dbus.Error.init();
+        defer err.deinit();
+
+        var reply = self.bus.callMessage(msg, &err) catch {
+            if (err.getMessage()) |error_msg| {
+                std.log.err("StartTransientUnit failed: {s}", .{error_msg});
+            }
+            return ManagerError.CallFailed;
+        };
+        defer reply.deinit();
+
+        // Read the job path from reply
+        const job_path = reply.readObjectPath() catch return ManagerError.CallFailed;
+        return self.allocator.dupe(u8, job_path) catch return ManagerError.OutOfMemory;
+    }
+
     /// Start a transient service unit
     /// Returns the job object path
     pub fn startTransientService(
@@ -309,29 +360,65 @@ pub const Manager = struct {
         return UnitSubState.fromString(state_str);
     }
 
-    /// Get the main PID of a service
+    /// Get the main PID of a service by calling systemctl show
     pub fn getServiceMainPID(self: *Self, unit_path: [*:0]const u8) ManagerError!u32 {
-        var err = dbus.Error.init();
-        defer err.deinit();
+        // Extract unit name from path (e.g., /org/freedesktop/systemd1/unit/cri_2dcontainer_2dxxx_2eservice)
+        const path_str = std.mem.span(unit_path);
 
-        var reply = self.bus.getProperty(
-            SYSTEMD_DEST,
-            unit_path,
-            SERVICE_IFACE,
-            "MainPID",
-            &err,
-            "u",
-        ) catch return ManagerError.CallFailed;
-        defer reply.deinit();
+        // Find the last '/' to get the unit name part
+        var unit_name_encoded: []const u8 = path_str;
+        if (std.mem.lastIndexOf(u8, path_str, "/")) |idx| {
+            unit_name_encoded = path_str[idx + 1 ..];
+        }
 
-        // Enter variant
-        reply.enterContainer('v', "u") catch return ManagerError.CallFailed;
+        // Decode the unit name (replace _2d with -, _2e with .)
+        var unit_name_buf: [256]u8 = undefined;
+        var unit_name_len: usize = 0;
+        var i: usize = 0;
+        while (i < unit_name_encoded.len) {
+            if (i + 2 < unit_name_encoded.len and unit_name_encoded[i] == '_' and unit_name_encoded[i + 1] == '2') {
+                if (unit_name_encoded[i + 2] == 'd') {
+                    unit_name_buf[unit_name_len] = '-';
+                    unit_name_len += 1;
+                    i += 3;
+                    continue;
+                } else if (unit_name_encoded[i + 2] == 'e') {
+                    unit_name_buf[unit_name_len] = '.';
+                    unit_name_len += 1;
+                    i += 3;
+                    continue;
+                }
+            }
+            unit_name_buf[unit_name_len] = unit_name_encoded[i];
+            unit_name_len += 1;
+            i += 1;
+        }
 
-        var pid: u32 = 0;
-        const r = c.sd_bus_message_read(reply.inner, "u", &pid);
-        if (r < 0) return ManagerError.CallFailed;
+        if (unit_name_len == 0) return ManagerError.UnitNotFound;
 
-        return pid;
+        // Run systemctl show --property=MainPID <unit_name>
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &.{
+                "systemctl",
+                "show",
+                "--property=MainPID",
+                unit_name_buf[0..unit_name_len],
+            },
+        }) catch return ManagerError.CallFailed;
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        // Parse the output: "MainPID=12345\n"
+        const output = result.stdout;
+        if (std.mem.startsWith(u8, output, "MainPID=")) {
+            const pid_str = std.mem.trim(u8, output[8..], " \n\r");
+            const pid = std.fmt.parseInt(u32, pid_str, 10) catch return ManagerError.CallFailed;
+            if (pid == 0) return ManagerError.CallFailed;
+            return pid;
+        }
+
+        return ManagerError.CallFailed;
     }
 
     /// List all units matching a pattern
@@ -428,7 +515,7 @@ pub fn podServiceName(id: []const u8, buf: []u8) ![]u8 {
     return std.fmt.bufPrint(buf, "cri-pod-{s}.service", .{id}) catch return error.BufferTooSmall;
 }
 
-/// Generate a container scope unit name
+/// Generate a container service unit name
 pub fn containerScopeName(id: []const u8, buf: []u8) ![]u8 {
-    return std.fmt.bufPrint(buf, "cri-container-{s}.scope", .{id}) catch return error.BufferTooSmall;
+    return std.fmt.bufPrint(buf, "cri-container-{s}.service", .{id}) catch return error.BufferTooSmall;
 }

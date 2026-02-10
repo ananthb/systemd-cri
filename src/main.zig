@@ -13,6 +13,7 @@ const streaming = @import("server/streaming.zig");
 const logging = @import("util/logging.zig");
 const prometheus = @import("metrics/prometheus.zig");
 const metrics_server = @import("metrics/server.zig");
+const cni = @import("network/cni.zig");
 
 const VERSION = "0.1.0";
 const DEFAULT_STATE_DIR = "/var/lib/systemd-cri";
@@ -253,8 +254,31 @@ pub fn main() !void {
     defer img_store.deinit();
     logging.info("Image store initialized", .{});
 
-    // Initialize pod manager
-    var pod_manager = pod.PodManager.init(allocator, &bus, &store);
+    // Initialize CNI plugin
+    var cni_plugin = cni.Cni.init(allocator, null);
+    defer cni_plugin.deinit();
+
+    // Ensure default CNI config exists
+    cni_plugin.ensureDefaultConfig() catch |err| {
+        logging.warn("Failed to ensure CNI config (continuing without networking): {}", .{err});
+    };
+
+    // Check if CNI plugins are available
+    const has_cni = cni_plugin.hasPlugins();
+    if (has_cni) {
+        logging.info("CNI plugin initialized", .{});
+    } else {
+        logging.warn("CNI plugins not found - networking will be disabled", .{});
+    }
+
+    // Initialize pod manager (pass CNI if available)
+    var pod_manager = pod.PodManager.init(
+        allocator,
+        &bus,
+        &store,
+        if (has_cni) &cni_plugin else null,
+    );
+    defer pod_manager.deinit();
 
     // Initialize container manager
     var container_manager = container.ContainerManager.init(allocator, &bus, &store, args.state_dir);
@@ -364,6 +388,8 @@ pub fn main() !void {
         args.socket_path,
         &runtime_svc,
         &image_svc,
+        &executor,
+        args.streaming_port,
     ) catch |err| {
         logging.err("Failed to initialize gRPC server: {}", .{err});
         std.process.exit(1);

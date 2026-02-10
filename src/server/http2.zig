@@ -217,6 +217,14 @@ pub const Http2Session = struct {
         return null;
     }
 
+    /// Check if the session wants to close (received GOAWAY or fatal error)
+    pub fn wantsClose(self: *Self) bool {
+        const session = self.session orelse return true;
+        // Session wants to close if there are no active streams and no pending data
+        return c.nghttp2_session_want_read(session) == 0 and
+            c.nghttp2_session_want_write(session) == 0;
+    }
+
     /// Send a gRPC response
     pub fn sendResponse(self: *Self, stream_id: i32, data: []const u8, status: u32) !void {
         const session = self.session orelse return Http2Error.SessionError;
@@ -250,18 +258,25 @@ pub const Http2Session = struct {
         @memcpy(full_message[0..5], &prefix);
         @memcpy(full_message[5..], data);
 
-        // Write DATA frame manually (without END_STREAM - trailers follow)
-        var data_frame_header: [9]u8 = undefined;
-        const msg_len: u24 = @intCast(full_message.len);
-        data_frame_header[0] = @intCast((msg_len >> 16) & 0xFF);
-        data_frame_header[1] = @intCast((msg_len >> 8) & 0xFF);
-        data_frame_header[2] = @intCast(msg_len & 0xFF);
-        data_frame_header[3] = 0x00; // DATA frame type
-        data_frame_header[4] = 0x00; // No flags (trailers will have END_STREAM)
-        std.mem.writeInt(u32, data_frame_header[5..9], @intCast(stream_id), .big);
+        // Write DATA frames manually, respecting max frame size (16384 bytes)
+        const max_frame_size: usize = 16384;
+        var offset: usize = 0;
+        while (offset < full_message.len) {
+            const chunk_size = @min(max_frame_size, full_message.len - offset);
 
-        try self.output_buffer.appendSlice(self.allocator, &data_frame_header);
-        try self.output_buffer.appendSlice(self.allocator, full_message);
+            var data_frame_header: [9]u8 = undefined;
+            const frame_len: u24 = @intCast(chunk_size);
+            data_frame_header[0] = @intCast((frame_len >> 16) & 0xFF);
+            data_frame_header[1] = @intCast((frame_len >> 8) & 0xFF);
+            data_frame_header[2] = @intCast(frame_len & 0xFF);
+            data_frame_header[3] = 0x00; // DATA frame type
+            data_frame_header[4] = 0x00; // No flags (trailers will have END_STREAM)
+            std.mem.writeInt(u32, data_frame_header[5..9], @intCast(stream_id), .big);
+
+            try self.output_buffer.appendSlice(self.allocator, &data_frame_header);
+            try self.output_buffer.appendSlice(self.allocator, full_message[offset..][0..chunk_size]);
+            offset += chunk_size;
+        }
 
         // Build trailers with grpc-status
         var status_buf: [16]u8 = undefined;

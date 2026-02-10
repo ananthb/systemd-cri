@@ -153,6 +153,7 @@
             '');
           };
 
+
           devShells.default = pkgs.mkShell {
             name = "systemd-cri-dev";
 
@@ -178,9 +179,11 @@
               echo "  zig version: $(zig version)"
               echo ""
               echo "Commands:"
-              echo "  zig build        - Build the project"
-              echo "  zig build run    - Build and run"
-              echo "  zig build test   - Run tests"
+              echo "  zig build              - Build the project"
+              echo "  zig build run          - Build and run"
+              echo "  zig build test         - Run unit tests"
+              echo "  zig build test-full    - Run full integration tests (requires root)"
+              echo "  zig build critest      - Run cri-tools tests (requires root)"
               echo ""
             '';
           };

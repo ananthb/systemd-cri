@@ -205,6 +205,8 @@ test "integration: RocksDB store container lifecycle with pod index" {
         .unit_name = "cri-container-001.service",
         .rootfs_path = "/var/lib/machines/nginx",
         .log_path = "/var/log/pods/pod-aaa/nginx.log",
+        .command = "/usr/sbin/nginx -g daemon off;",
+        .working_dir = "/",
         .labels = labels,
         .annotations = annotations,
     };
@@ -224,6 +226,8 @@ test "integration: RocksDB store container lifecycle with pod index" {
         .unit_name = "cri-container-002.service",
         .rootfs_path = null,
         .log_path = null,
+        .command = null,
+        .working_dir = null,
         .labels = labels,
         .annotations = annotations,
     };
@@ -243,6 +247,8 @@ test "integration: RocksDB store container lifecycle with pod index" {
         .unit_name = "cri-container-003.service",
         .rootfs_path = null,
         .log_path = null,
+        .command = "/usr/local/bin/redis-server",
+        .working_dir = "/data",
         .labels = labels,
         .annotations = annotations,
     };

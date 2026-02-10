@@ -4,3 +4,7 @@ result
 
 # direnv
 .direnv
+
+# Generated protobuf C files (regenerate with protoc-c)
+src/cri/proto/*.pb-c.c
+src/cri/proto/*.pb-c.h

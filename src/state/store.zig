@@ -76,6 +76,10 @@ pub const PodSandbox = struct {
     unit_name: []const u8,
     // Network namespace path (if using CNI)
     network_namespace: ?[]const u8,
+    // Pod IP address (assigned by CNI)
+    pod_ip: ?[]const u8 = null,
+    // Pod gateway
+    pod_gateway: ?[]const u8 = null,
 
     pub fn deinit(self: *PodSandbox, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -85,6 +89,12 @@ pub const PodSandbox = struct {
         allocator.free(self.unit_name);
         if (self.network_namespace) |ns| {
             allocator.free(ns);
+        }
+        if (self.pod_ip) |ip| {
+            allocator.free(ip);
+        }
+        if (self.pod_gateway) |gw| {
+            allocator.free(gw);
         }
 
         var label_it = self.labels.iterator();
@@ -120,10 +130,23 @@ pub const Container = struct {
     annotations: std.StringHashMap([]const u8),
     // Systemd unit info
     unit_name: []const u8,
-    // Container rootfs path
+    // Container rootfs path (merged overlay mount point)
     rootfs_path: ?[]const u8,
+    // Image rootfs path (from machined, used as overlay lower layer)
+    image_rootfs: ?[]const u8 = null,
     // Log path
     log_path: ?[]const u8,
+    // Command to execute (space-separated)
+    command: ?[]const u8,
+    // Working directory
+    working_dir: ?[]const u8,
+    // Security context
+    run_as_user: ?i64 = null,
+    run_as_group: ?i64 = null,
+    privileged: bool = false,
+    readonly_rootfs: bool = false,
+    // Mounts (serialized as JSON array)
+    mounts_json: ?[]const u8 = null,
 
     pub fn deinit(self: *Container, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -133,7 +156,11 @@ pub const Container = struct {
         allocator.free(self.image_ref);
         allocator.free(self.unit_name);
         if (self.rootfs_path) |p| allocator.free(p);
+        if (self.image_rootfs) |p| allocator.free(p);
         if (self.log_path) |p| allocator.free(p);
+        if (self.command) |cmd| allocator.free(cmd);
+        if (self.working_dir) |wd| allocator.free(wd);
+        if (self.mounts_json) |m| allocator.free(m);
 
         var label_it = self.labels.iterator();
         while (label_it.next()) |entry| {
@@ -491,6 +518,18 @@ pub const Store = struct {
             try w.writeAll("\"network_namespace\":null,");
         }
 
+        if (pod.pod_ip) |ip| {
+            try w.print("\"pod_ip\":\"{s}\",", .{ip});
+        } else {
+            try w.writeAll("\"pod_ip\":null,");
+        }
+
+        if (pod.pod_gateway) |gw| {
+            try w.print("\"pod_gateway\":\"{s}\",", .{gw});
+        } else {
+            try w.writeAll("\"pod_gateway\":null,");
+        }
+
         // Labels
         try w.writeAll("\"labels\":{");
         var first = true;
@@ -560,6 +599,20 @@ pub const Store = struct {
             break :blk null;
         } else null;
 
+        const pod_ip = if (root.get("pod_ip")) |ip_val| blk: {
+            if (ip_val == .string) {
+                break :blk try self.allocator.dupe(u8, ip_val.string);
+            }
+            break :blk null;
+        } else null;
+
+        const pod_gateway = if (root.get("pod_gateway")) |gw_val| blk: {
+            if (gw_val == .string) {
+                break :blk try self.allocator.dupe(u8, gw_val.string);
+            }
+            break :blk null;
+        } else null;
+
         return PodSandbox{
             .id = try self.allocator.dupe(u8, root.get("id").?.string),
             .name = try self.allocator.dupe(u8, root.get("name").?.string),
@@ -569,6 +622,8 @@ pub const Store = struct {
             .created_at = root.get("created_at").?.integer,
             .unit_name = try self.allocator.dupe(u8, root.get("unit_name").?.string),
             .network_namespace = network_namespace,
+            .pod_ip = pod_ip,
+            .pod_gateway = pod_gateway,
             .labels = labels,
             .annotations = annotations,
         };
@@ -604,6 +659,12 @@ pub const Store = struct {
             try w.writeAll("\"rootfs_path\":null,");
         }
 
+        if (container.image_rootfs) |p| {
+            try w.print("\"image_rootfs\":\"{s}\",", .{p});
+        } else {
+            try w.writeAll("\"image_rootfs\":null,");
+        }
+
         if (container.log_path) |p| {
             try w.print("\"log_path\":\"{s}\",", .{p});
         } else {
@@ -630,7 +691,56 @@ pub const Store = struct {
             try w.print("\"{s}\":\"{s}\"", .{ entry.key_ptr.*, entry.value_ptr.* });
             first = false;
         }
-        try w.writeAll("}");
+        try w.writeAll("},");
+
+        // Command
+        if (container.command) |cmd| {
+            try w.print("\"command\":\"{s}\",", .{cmd});
+        } else {
+            try w.writeAll("\"command\":null,");
+        }
+
+        // Working directory
+        if (container.working_dir) |wd| {
+            try w.print("\"working_dir\":\"{s}\",", .{wd});
+        } else {
+            try w.writeAll("\"working_dir\":null,");
+        }
+
+        // Security context
+        if (container.run_as_user) |uid| {
+            try w.print("\"run_as_user\":{d},", .{uid});
+        } else {
+            try w.writeAll("\"run_as_user\":null,");
+        }
+
+        if (container.run_as_group) |gid| {
+            try w.print("\"run_as_group\":{d},", .{gid});
+        } else {
+            try w.writeAll("\"run_as_group\":null,");
+        }
+
+        try w.print("\"privileged\":{},", .{container.privileged});
+        try w.print("\"readonly_rootfs\":{},", .{container.readonly_rootfs});
+
+        // Mounts JSON (stored as escaped string)
+        if (container.mounts_json) |mj| {
+            try w.writeAll("\"mounts_json\":\"");
+            // Escape JSON special characters
+            for (mj) |ch| {
+                switch (ch) {
+                    '"' => try w.writeAll("\\\""),
+                    '\\' => try w.writeAll("\\\\"),
+                    '\n' => try w.writeAll("\\n"),
+                    '\r' => try w.writeAll("\\r"),
+                    '\t' => try w.writeAll("\\t"),
+                    else => try w.writeByte(ch),
+                }
+            }
+            try w.writeAll("\"");
+        } else {
+            try w.writeAll("\"mounts_json\":null");
+        }
 
         try w.writeAll("}");
 
@@ -677,7 +787,41 @@ pub const Store = struct {
             break :blk null;
         } else null;
 
+        const image_rootfs = if (root.get("image_rootfs")) |val| blk: {
+            if (val == .string) break :blk try self.allocator.dupe(u8, val.string);
+            break :blk null;
+        } else null;
+
         const log_path = if (root.get("log_path")) |val| blk: {
+            if (val == .string) break :blk try self.allocator.dupe(u8, val.string);
+            break :blk null;
+        } else null;
+
+        const command = if (root.get("command")) |val| blk: {
+            if (val == .string) break :blk try self.allocator.dupe(u8, val.string);
+            break :blk null;
+        } else null;
+
+        const working_dir = if (root.get("working_dir")) |val| blk: {
+            if (val == .string) break :blk try self.allocator.dupe(u8, val.string);
+            break :blk null;
+        } else null;
+
+        // Security context
+        const run_as_user: ?i64 = if (root.get("run_as_user")) |val| blk: {
+            if (val == .integer) break :blk val.integer;
+            break :blk null;
+        } else null;
+
+        const run_as_group: ?i64 = if (root.get("run_as_group")) |val| blk: {
+            if (val == .integer) break :blk val.integer;
+            break :blk null;
+        } else null;
+
+        const privileged = if (root.get("privileged")) |val| val == .bool and val.bool else false;
+        const readonly_rootfs = if (root.get("readonly_rootfs")) |val| val == .bool and val.bool else false;
+
+        const mounts_json = if (root.get("mounts_json")) |val| blk: {
             if (val == .string) break :blk try self.allocator.dupe(u8, val.string);
             break :blk null;
         } else null;
@@ -699,9 +843,17 @@ pub const Store = struct {
             } else null,
             .unit_name = try self.allocator.dupe(u8, root.get("unit_name").?.string),
             .rootfs_path = rootfs_path,
+            .image_rootfs = image_rootfs,
             .log_path = log_path,
+            .command = command,
+            .working_dir = working_dir,
             .labels = labels,
             .annotations = annotations,
+            .run_as_user = run_as_user,
+            .run_as_group = run_as_group,
+            .privileged = privileged,
+            .readonly_rootfs = readonly_rootfs,
+            .mounts_json = mounts_json,
         };
     }
 };
@@ -802,6 +954,8 @@ test "Container operations with pod index" {
         .unit_name = "cri-container-1.service",
         .rootfs_path = null,
         .log_path = null,
+        .command = null,
+        .working_dir = null,
         .labels = labels,
         .annotations = annotations,
     };
@@ -821,6 +975,8 @@ test "Container operations with pod index" {
         .unit_name = "cri-container-2.service",
         .rootfs_path = null,
         .log_path = null,
+        .command = null,
+        .working_dir = null,
         .labels = labels,
         .annotations = annotations,
     };
