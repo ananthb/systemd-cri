@@ -108,7 +108,7 @@ test "full integration: complete pod lifecycle" {
     defer state_store.deinit();
 
     // Initialize pod manager
-    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store);
+    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store, null);
 
     // Create a pod
     const pod_config = pod.PodConfig{
@@ -199,7 +199,7 @@ test "full integration: complete container lifecycle" {
     var state_store = try store.Store.init(allocator, db_path);
     defer state_store.deinit();
 
-    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store);
+    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store, null);
     var container_manager = container.ContainerManager.init(allocator, &bus, &state_store, config.state_dir);
 
     // Create a pod first
@@ -399,7 +399,7 @@ test "full integration: multiple pods and containers" {
     var state_store = try store.Store.init(allocator, db_path);
     defer state_store.deinit();
 
-    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store);
+    var pod_manager = pod.PodManager.init(allocator, &bus, &state_store, null);
 
     // Create multiple pods
     const num_pods = 3;

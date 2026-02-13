@@ -510,8 +510,12 @@ pub const GrpcServer = struct {
         defer self.allocator.destroy(network);
         network.* = std.mem.zeroes(proto.PodSandboxNetworkStatus);
         network.base.descriptor = &proto.c.runtime__v1__pod_sandbox_network_status__descriptor;
-        // Use empty string for host network mode, or provide actual IP from CNI
-        network.ip = try self.allocator.dupeZ(u8, "");
+        // Use actual IP from pod status, or empty string for host network mode
+        const ip_str = if (status_resp.status.network) |net|
+            if (net.ip) |ip| ip else ""
+        else
+            "";
+        network.ip = try self.allocator.dupeZ(u8, ip_str);
         defer self.allocator.free(std.mem.span(network.ip));
         network.n_additional_ips = 0;
         network.additional_ips = null;

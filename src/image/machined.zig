@@ -309,35 +309,52 @@ pub const MachineImageManager = struct {
         };
     }
 
-    /// Remove an image
+    /// Remove an image (with retry for busy resources)
     pub fn removeImage(self: *Self, name: []const u8) MachineImageError!void {
         const name_z = self.allocator.dupeZ(u8, name) catch return MachineImageError.OutOfMemory;
         defer self.allocator.free(name_z);
 
         logging.info("Removing machine image: {s}", .{name});
 
-        var err = dbus.Error.init();
-        defer err.deinit();
+        // Retry up to 3 times for busy resources
+        var attempts: usize = 0;
+        while (attempts < 3) : (attempts += 1) {
+            if (attempts > 0) {
+                std.Thread.sleep(200 * std.time.ns_per_ms);
+            }
 
-        const msg = self.bus.callMethodRaw(
-            MACHINE1_DEST,
-            MACHINE1_PATH,
-            MACHINE1_IFACE,
-            "RemoveImage",
-        ) catch return MachineImageError.DbusError;
-        defer _ = dbus.raw.sd_bus_message_unref(msg);
+            var err = dbus.Error.init();
+            defer err.deinit();
 
-        if (dbus.raw.sd_bus_message_append(msg, "s", name_z.ptr) < 0) {
-            return MachineImageError.DbusError;
+            const msg = self.bus.callMethodRaw(
+                MACHINE1_DEST,
+                MACHINE1_PATH,
+                MACHINE1_IFACE,
+                "RemoveImage",
+            ) catch return MachineImageError.DbusError;
+            defer _ = dbus.raw.sd_bus_message_unref(msg);
+
+            if (dbus.raw.sd_bus_message_append(msg, "s", name_z.ptr) < 0) {
+                return MachineImageError.DbusError;
+            }
+
+            var reply = self.bus.callMessage(msg, &err) catch {
+                if (err.getMessage()) |emsg| {
+                    // Check if it's a busy error
+                    if (std.mem.indexOf(u8, emsg, "busy") != null) {
+                        logging.debug("Image busy, retrying removal: {s}", .{name});
+                        continue;
+                    }
+                    logging.err("RemoveImage failed: {s}", .{emsg});
+                }
+                return MachineImageError.RemoveFailed;
+            };
+            reply.deinit();
+            return; // Success
         }
 
-        var reply = self.bus.callMessage(msg, &err) catch {
-            if (err.getMessage()) |emsg| {
-                logging.err("RemoveImage failed: {s}", .{emsg});
-            }
-            return MachineImageError.RemoveFailed;
-        };
-        reply.deinit();
+        logging.err("RemoveImage failed after retries: {s}", .{name});
+        return MachineImageError.RemoveFailed;
     }
 
     /// Clone an image (creates a writable copy)

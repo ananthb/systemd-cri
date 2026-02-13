@@ -123,7 +123,7 @@ fn generateMachineName(allocator: std.mem.Allocator, image_ref: []const u8) ![]c
     for (ref.repository) |char| {
         if (std.ascii.isAlphanumeric(char)) {
             name_buf.append(allocator, std.ascii.toLower(char)) catch return error.OutOfMemory;
-        } else if (char == '/' or char == '_' or char == '.') {
+        } else if (char == '/' or char == '_' or char == '.' or char == '-') {
             name_buf.append(allocator, '-') catch return error.OutOfMemory;
         }
     }
@@ -135,7 +135,7 @@ fn generateMachineName(allocator: std.mem.Allocator, image_ref: []const u8) ![]c
             for (tag) |char| {
                 if (std.ascii.isAlphanumeric(char)) {
                     name_buf.append(allocator, std.ascii.toLower(char)) catch return error.OutOfMemory;
-                } else if (char == '.' or char == '_') {
+                } else if (char == '.' or char == '_' or char == '-') {
                     name_buf.append(allocator, '-') catch return error.OutOfMemory;
                 }
             }

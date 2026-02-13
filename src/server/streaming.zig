@@ -697,8 +697,12 @@ pub const StreamFrame = struct {
 
     pub fn decode(data: []const u8) ?StreamFrame {
         if (data.len < 1) return null;
+        const raw_type = data[0];
+        if (raw_type > @intFromEnum(StreamType.close)) {
+            return null;
+        }
         return StreamFrame{
-            .stream_type = @enumFromInt(data[0]),
+            .stream_type = @enumFromInt(raw_type),
             .data = data[1..],
         };
     }

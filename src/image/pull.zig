@@ -99,8 +99,8 @@ pub const ImagePuller = struct {
             std.fmt.allocPrint(self.allocator, "{s}:latest", .{source}) catch return PullError.OutOfMemory;
         defer self.allocator.free(full_source);
 
-        // Create OCI directory for skopeo output
-        const oci_dir = std.fs.path.join(self.allocator, &.{ self.temp_dir, "oci" }) catch return PullError.OutOfMemory;
+        // Create unique OCI directory for skopeo output using machine_name to avoid race conditions
+        const oci_dir = std.fs.path.join(self.allocator, &.{ self.temp_dir, machine_name }) catch return PullError.OutOfMemory;
         defer self.allocator.free(oci_dir);
 
         // Clean up any previous attempt
@@ -143,8 +143,10 @@ pub const ImagePuller = struct {
             return PullError.PullFailed;
         }
 
-        // Create bundle directory for umoci output
-        const bundle_dir = std.fs.path.join(self.allocator, &.{ self.temp_dir, "bundle" }) catch return PullError.OutOfMemory;
+        // Create bundle directory for umoci output using machine_name suffix
+        const bundle_name = std.fmt.allocPrint(self.allocator, "bundle-{s}", .{machine_name}) catch return PullError.OutOfMemory;
+        defer self.allocator.free(bundle_name);
+        const bundle_dir = std.fs.path.join(self.allocator, &.{ self.temp_dir, bundle_name }) catch return PullError.OutOfMemory;
         defer self.allocator.free(bundle_dir);
 
         // Clean up any previous attempt

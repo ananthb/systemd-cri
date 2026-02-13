@@ -99,6 +99,15 @@ pub const RuntimeService = struct {
     pub fn podSandboxStatus(self: *Self, pod_sandbox_id: []const u8) !PodSandboxStatusResponse {
         const pod_status = try self.pod_manager.podSandboxStatus(pod_sandbox_id);
 
+        // Build network status from pod manager's response
+        const network_status: ?PodSandboxNetworkStatus = if (pod_status.network) |net|
+            PodSandboxNetworkStatus{
+                .ip = net.ip,
+                .additional_ips = &.{}, // TODO: Convert net.additional_ips strings to PodIP structs
+            }
+        else
+            null;
+
         return PodSandboxStatusResponse{
             .status = .{
                 .id = pod_status.id,
@@ -113,7 +122,7 @@ pub const RuntimeService = struct {
                     else => .sandbox_notready,
                 },
                 .created_at = pod_status.created_at * 1_000_000_000, // Convert to nanoseconds
-                .network = null,
+                .network = network_status,
                 .linux = null,
                 .labels = null,
                 .annotations = null,
