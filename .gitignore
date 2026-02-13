@@ -1,10 +1,16 @@
+.direnv
 .zig-cache
 zig-out
 result
 
-# direnv
-.direnv
+# Go build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+*.out
 
-# Generated protobuf C files (regenerate with protoc-c)
-src/cri/proto/*.pb-c.c
-src/cri/proto/*.pb-c.h
+# Local state
+/state.db
+/legacy-zig/.zig-cache
+/legacy-zig/zig-out
