@@ -4,15 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/cri-api/pkg/apis/runtime/v1"
 
@@ -88,15 +87,14 @@ func (s *ImageServer) PullImage(ctx context.Context, req *v1.PullImageRequest) (
 		return &v1.PullImageResponse{ImageRef: existing.ID}, nil
 	}
 
-	if _, err := exec.LookPath("skopeo"); err != nil {
-		return nil, fmt.Errorf("skopeo not found")
-	}
-	if _, err := exec.LookPath("umoci"); err != nil {
-		return nil, fmt.Errorf("umoci not found")
+	var auth *authn.AuthConfig
+	if req.Auth != nil {
+		auth = &authn.AuthConfig{
+			Username: req.Auth.Username,
+			Password: req.Auth.Password,
+		}
 	}
 
-	pullRef := ref
-	source := "docker://" + pullRef
 	tmpDir, err := os.MkdirTemp(s.stateDir, "image-pull-")
 	if err != nil {
 		return nil, err
@@ -105,21 +103,12 @@ func (s *ImageServer) PullImage(ctx context.Context, req *v1.PullImageRequest) (
 
 	ociDir := filepath.Join(tmpDir, "oci")
 	bundleDir := filepath.Join(tmpDir, "bundle")
-	if err := os.MkdirAll(ociDir, 0755); err != nil {
+
+	if _, err := pullImageNative(ctx, ref, auth, ociDir); err != nil {
 		return nil, err
 	}
 
-	skopeoArgs := []string{"copy", "--insecure-policy"}
-	if req.Auth != nil && req.Auth.Username != "" && req.Auth.Password != "" {
-		skopeoArgs = append(skopeoArgs, "--src-creds", req.Auth.Username+":"+req.Auth.Password)
-	}
-	skopeoArgs = append(skopeoArgs, source, "oci:"+ociDir+":latest")
-	if err := exec.CommandContext(ctx, "skopeo", skopeoArgs...).Run(); err != nil {
-		return nil, err
-	}
-
-	umociArgs := []string{"unpack", "--rootless", "--image", ociDir + ":latest", bundleDir}
-	if err := exec.CommandContext(ctx, "umoci", umociArgs...).Run(); err != nil {
+	if err := unpackImageNative(ctx, ociDir, bundleDir); err != nil {
 		return nil, err
 	}
 

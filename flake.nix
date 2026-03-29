@@ -22,8 +22,8 @@
               builtins.head (builtins.filter (l: builtins.match "^go [0-9]+\\.[0-9]+(\\.[0-9]+)?$" l != null) lines);
             m = builtins.match "^go ([0-9]+\\.[0-9]+)(\\.[0-9]+)?$" goLine;
           in builtins.elemAt m 0;
-        goAttr = "go_${builtins.replaceStrings ["."] ["_"] goVersion}";
-        go = builtins.getAttr goAttr pkgs;
+        goAttr = "go_1_26";
+        go = pkgs.go_1_26;
         preCommit = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
@@ -31,11 +31,13 @@
           };
         };
         app = pkgs.buildGoApplication {
+          inherit go;
           pname = "systemd-cri";
           version = "0.2.0";
           src = ./.;
           modules = ./gomod2nix.toml;
           subPackages = [ "cmd/systemd-cri" ];
+          GOTOOLCHAIN = "local";
         };
 
         # Dedicated offline checks
@@ -68,8 +70,6 @@
             environment.systemPackages = [
               app
               pkgs.cri-tools
-              pkgs.skopeo
-              pkgs.umoci
               pkgs.util-linux
               pkgs.sqlite
             ];
@@ -179,10 +179,9 @@
             pkgs.pre-commit
             pkgs.gomod2nix
             pkgs.cri-tools
-            pkgs.skopeo
-            pkgs.umoci
           ];
           GO111MODULE = "on";
+          GOTOOLCHAIN = "local";
           shellHook = preCommit.shellHook;
         };
 
