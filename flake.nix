@@ -112,8 +112,64 @@
             machine.succeed(f"systemctl is-failed cri-pod-{pod_id}.service || ! systemctl is-active cri-pod-{pod_id}.service")
           '';
         };
+        version = if (self ? shortRev) then self.shortRev else "dev";
+
+        # Build a release tarball for a given target
+        mkReleaseTarball = name: appBuild: pkgs.stdenv.mkDerivation {
+          pname = "systemd-cri-release-${name}";
+          inherit version;
+          src = appBuild;
+
+          nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
+
+          buildPhase = ''
+            mkdir -p systemd-cri/bin
+            find $src -type f -name systemd-cri -exec cp {} systemd-cri/bin/ \;
+            cp ${./README.md} systemd-cri/ 2>/dev/null || echo "No README" > systemd-cri/README.md
+            cp ${./LICENSE} systemd-cri/ 2>/dev/null || true
+          '';
+
+          installPhase = ''
+            mkdir -p $out
+            tar -czvf $out/systemd-cri-${name}.tar.gz systemd-cri
+          '';
+        };
+
+        app-x86_64 = app;
+        app-aarch64 = app.overrideAttrs (old: {
+          GOARCH = "arm64";
+          CGO_ENABLED = "0";
+        });
+
+        releaseTarball-x86_64 = mkReleaseTarball "x86_64-linux" app-x86_64;
+        releaseTarball-aarch64 = mkReleaseTarball "aarch64-linux" app-aarch64;
       in
       {
+        packages = {
+          default = app;
+          systemd-cri = app;
+          inherit releaseTarball-x86_64 releaseTarball-aarch64;
+
+          # Build release artifacts + checksums (writes to ./release/)
+          release = pkgs.writeShellScriptBin "systemd-cri-release" ''
+            set -e
+            rm -rf release
+            mkdir -p release
+
+            echo "Building release tarballs..."
+            cp ${releaseTarball-x86_64}/*.tar.gz release/
+            cp ${releaseTarball-aarch64}/*.tar.gz release/
+
+            cd release
+            sha256sum *.tar.gz > SHA256SUMS
+            echo ""
+            echo "Release artifacts:"
+            ls -lh
+            echo ""
+            cat SHA256SUMS
+          '';
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [
             go
