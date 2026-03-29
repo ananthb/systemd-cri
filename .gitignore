@@ -17,3 +17,4 @@ result
 
 # Managed by pre-commit-hooks.nix
 .pre-commit-config.yaml
+/release/

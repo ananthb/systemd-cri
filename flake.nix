@@ -15,14 +15,6 @@
           inherit system;
           overlays = [ gomod2nix.overlays.default ];
         };
-        goVersion =
-          let
-            lines = builtins.filter builtins.isString (builtins.split "\n" (builtins.readFile ./go.mod));
-            goLine =
-              builtins.head (builtins.filter (l: builtins.match "^go [0-9]+\\.[0-9]+(\\.[0-9]+)?$" l != null) lines);
-            m = builtins.match "^go ([0-9]+\\.[0-9]+)(\\.[0-9]+)?$" goLine;
-          in builtins.elemAt m 0;
-        goAttr = "go_1_26";
         go = pkgs.go_1_26;
         preCommit = pre-commit-hooks.lib.${system}.run {
           src = ./.;
@@ -86,11 +78,7 @@
             # Define endpoints for crictl
             endpoint = "unix:///run/systemd-cri/cri.sock"
             crictl = f"crictl --runtime-endpoint {endpoint} --image-endpoint {endpoint}"
-
             # 2. Run basic critest to ensure the server starts and responds
-            # We use the critest-runner.sh but it starts its own server, so we might want to be careful.
-            # Actually, let's just use crictl directly for the lifecycle test.
-            
             machine.succeed(f"{crictl} version")
 
             # 3. Manually test Pod Sandbox lifecycle and verify .service unit
