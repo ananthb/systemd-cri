@@ -3,16 +3,19 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/cri-api/pkg/apis/runtime/v1"
+	"k8s.io/kubelet/pkg/cri/streaming"
 
 	"systemd-cri/internal/config"
 	"systemd-cri/internal/cri"
@@ -49,22 +52,38 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open state store: %v", err)
 	}
-	defer st.Close()
+	defer func() { _ = st.Close() }()
 
 	systemdMgr, err := systemd.New()
 	if err != nil {
 		log.Fatalf("failed to connect to systemd: %v", err)
 	}
-	defer systemdMgr.Close()
+	defer func() { _ = systemdMgr.Close() }()
 
 	runtimeSrv := cri.NewRuntimeServer(st, systemdMgr, cfg.StateDir)
-	imageSrv := cri.NewImageServer()
+	imageSrv := cri.NewImageServer(st, cfg.StateDir)
+	streamRuntime := cri.NewStreamRuntime(st)
+
+	streamAddr := net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", cfg.StreamingPort))
+	streamConfig := streaming.DefaultConfig
+	streamConfig.Addr = streamAddr
+	streamConfig.StreamIdleTimeout = 4 * time.Hour
+	streamServer, err := streaming.NewServer(streamConfig, streamRuntime)
+	if err != nil {
+		log.Fatalf("failed to create streaming server: %v", err)
+	}
+	runtimeSrv.SetStreamingServer(streamServer)
+	go func() {
+		if err := streamServer.Start(true); err != nil {
+			log.Printf("streaming server stopped: %v", err)
+		}
+	}()
 
 	lis, err := net.Listen("unix", cfg.SocketPath)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %v", cfg.SocketPath, err)
 	}
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 
 	grpcServer := grpc.NewServer()
 	v1.RegisterRuntimeServiceServer(grpcServer, runtimeSrv)
@@ -80,6 +99,7 @@ func main() {
 		log.Println("shutting down...")
 		cancel()
 		grpcServer.GracefulStop()
+		_ = streamServer.Stop()
 	}()
 
 	log.Printf("systemd-cri-go listening on %s", cfg.SocketPath)

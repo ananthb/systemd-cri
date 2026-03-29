@@ -20,13 +20,14 @@ func New() (*Manager, error) {
 }
 
 func (m *Manager) Close() error {
-	return m.conn.Close()
+	m.conn.Close()
+	return nil
 }
 
 func (m *Manager) StartTransientService(ctx context.Context, name string, execPath string, args []string, props ...dbus.Property) error {
-	exec := []dbus.ExecStart{{Path: execPath, Args: append([]string{execPath}, args...), Unescape: false}}
+	command := append([]string{execPath}, args...)
 	allProps := []dbus.Property{
-		dbus.PropExecStart(exec),
+		dbus.PropExecStart(command, false),
 		dbus.PropRemainAfterExit(true),
 		dbus.PropType("simple"),
 	}
@@ -58,8 +59,22 @@ func (m *Manager) StopUnit(ctx context.Context, name string) error {
 	}
 }
 
+func (m *Manager) DeleteUnit(ctx context.Context, name string) error {
+	// For transient units, stop is enough as they are not persisted on disk by us in /run/systemd/system/
+	// unless we manually wrote them. Since we are moving back to transient units,
+	// we don't need to delete files.
+	return nil
+}
+
 func (m *Manager) GetUnitState(ctx context.Context, name string) (string, error) {
-	return m.conn.GetUnitPropertyContext(ctx, name, "ActiveState")
+	prop, err := m.conn.GetUnitPropertyContext(ctx, name, "ActiveState")
+	if err != nil {
+		return "", err
+	}
+	if value, ok := prop.Value.Value().(string); ok {
+		return value, nil
+	}
+	return "", nil
 }
 
 func (m *Manager) GetUnitMainPID(ctx context.Context, name string) (uint32, error) {
@@ -67,7 +82,10 @@ func (m *Manager) GetUnitMainPID(ctx context.Context, name string) (uint32, erro
 	if err != nil {
 		return 0, err
 	}
-	return pid.Value.(uint32), nil
+	if value, ok := pid.Value.Value().(uint32); ok {
+		return value, nil
+	}
+	return 0, nil
 }
 
 func DefaultContext() (context.Context, context.CancelFunc) {
