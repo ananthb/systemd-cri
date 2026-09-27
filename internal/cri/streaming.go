@@ -11,7 +11,7 @@ import (
 
 	"k8s.io/client-go/tools/remotecommand"
 
-	"systemd-cri/internal/store"
+	"go.calculon.tech/systemd-cri/internal/store"
 )
 
 type StreamRuntime struct {
