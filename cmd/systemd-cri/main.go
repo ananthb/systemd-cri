@@ -17,10 +17,10 @@ import (
 	"k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubelet/pkg/cri/streaming"
 
-	"systemd-cri/internal/config"
-	"systemd-cri/internal/cri"
-	"systemd-cri/internal/store"
-	"systemd-cri/internal/systemd"
+	"go.calculon.tech/systemd-cri/internal/config"
+	"go.calculon.tech/systemd-cri/internal/cri"
+	"go.calculon.tech/systemd-cri/internal/store"
+	"go.calculon.tech/systemd-cri/internal/systemd"
 )
 
 func main() {

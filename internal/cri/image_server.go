@@ -15,7 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/cri-api/pkg/apis/runtime/v1"
 
-	"systemd-cri/internal/store"
+	"go.calculon.tech/systemd-cri/internal/store"
 )
 
 type ImageServer struct {

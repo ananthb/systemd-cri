@@ -19,8 +19,8 @@ import (
 	"k8s.io/cri-api/pkg/apis/runtime/v1"
 	"k8s.io/kubelet/pkg/cri/streaming"
 
-	"systemd-cri/internal/store"
-	"systemd-cri/internal/systemd"
+	"go.calculon.tech/systemd-cri/internal/store"
+	"go.calculon.tech/systemd-cri/internal/systemd"
 )
 
 type RuntimeServer struct {

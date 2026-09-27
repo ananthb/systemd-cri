@@ -1,4 +1,4 @@
-module systemd-cri
+module go.calculon.tech/systemd-cri
 
 go 1.26.0
 
