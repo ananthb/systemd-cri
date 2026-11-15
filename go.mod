@@ -11,7 +11,7 @@ require (
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v0.37.2
 	k8s.io/cri-api v0.30.0
-	k8s.io/kubelet v0.30.0
+	k8s.io/kubelet v0.37.2
 	modernc.org/sqlite v1.48.0
 )
 
