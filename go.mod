@@ -3,7 +3,7 @@ module go.calculon.tech/systemd-cri
 go 1.26.0
 
 require (
-	github.com/coreos/go-systemd/v22 v22.5.0
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/google/go-containerregistry v0.21.3
 	github.com/opencontainers/umoci v0.6.0
