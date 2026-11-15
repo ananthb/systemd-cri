@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/coreos/go-systemd/v22 v22.5.0
-	github.com/godbus/dbus/v5 v5.1.0
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/google/go-containerregistry v0.21.3
 	github.com/opencontainers/umoci v0.6.0
 	google.golang.org/grpc v1.66.0
