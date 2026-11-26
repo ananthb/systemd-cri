@@ -8,8 +8,8 @@ require (
 	github.com/google/go-containerregistry v0.21.3
 	github.com/opencontainers/umoci v0.6.0
 	google.golang.org/grpc v1.66.0
-	k8s.io/apimachinery v0.37.2
-	k8s.io/client-go v0.37.2
+	k8s.io/apimachinery v0.37.3
+	k8s.io/client-go v0.37.3
 	k8s.io/cri-api v0.30.0
 	k8s.io/kubelet v0.30.0
 	modernc.org/sqlite v1.48.0
@@ -76,11 +76,11 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
-	k8s.io/api v0.37.2 // indirect
+	k8s.io/api v0.37.3 // indirect
 	k8s.io/apiserver v0.30.0 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
-	k8s.io/streaming v0.37.2 // indirect
+	k8s.io/streaming v0.37.3 // indirect
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd // indirect
 	modernc.org/libc v1.70.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
